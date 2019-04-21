@@ -4,12 +4,17 @@
 target
 .classpath
 .idea/
+.vscode/
 *.iml
 .akconfig
 .DS_Store
 **/.DS_Store
 *.swo
 *.swp
+.cache/
+.go/
+release/
+bin/
 
 #df-daemon
 
@@ -37,7 +42,10 @@ getter.log*
 .pydevproject
 
 #supernode
+.factorypath
 
+# docs
 
-
-
+docs/.build/themes/
+docs/.build/content/
+docs/.build/static/images/

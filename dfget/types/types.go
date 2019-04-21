@@ -1,5 +1,5 @@
 /*
- * Copyright 1999-2018 Alibaba Group.
+ * Copyright The Dragonfly Authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,3 +18,8 @@
 // Do not use 'map[string]string' to define a data transported between different
 // modules(systems). It's hard to read and maintain.
 package types
+
+// MetaInfo stores meta information of dfget.
+type MetaInfo struct {
+	ServicePort int
+}

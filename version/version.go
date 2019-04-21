@@ -1,5 +1,5 @@
 /*
- * Copyright 1999-2018 Alibaba Group.
+ * Copyright The Dragonfly Authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,8 @@ package version
 
 var (
 	// Version is the version of the project Dragonfly
-	Version = "0.2.0"
+	// populate via ldflags
+	Version string
 
 	// DFDaemonVersion is the version of dfdaemon
 	DFDaemonVersion = Version

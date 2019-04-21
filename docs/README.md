@@ -1,78 +1,69 @@
-# Dragonfly
+# Dragonfly Document
 
-[![Join the chat at https://gitter.im/alibaba/Dragonfly](https://badges.gitter.im/alibaba/Dragonfly.svg)](https://gitter.im/alibaba/Dragonfly?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
-[![License](https://img.shields.io/badge/license-Apache%202-brightgreen.svg)](https://github.com/alibaba/Dragonfly/blob/master/LICENSE)
-[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Falibaba%2FDragonfly.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Falibaba%2FDragonfly?ref=badge_shield)
-[![Build Status](https://travis-ci.org/alibaba/Dragonfly.svg?branch=master)](https://travis-ci.org/alibaba/Dragonfly)
+Dragonfly Document is written, drawn, memorialized representation of all things about Dragonfly. For those who are generally interested in Dragonfly, README.md of this repo is sufficient. While for end users, all details contained in `/docs` is the best guide all should have. And for developers, contents in Developer Guide part is that all need.
 
-## ![Dragonfly](./images/logo.png)
+Organization of document is as following:
 
-## Contents
+* [Quick Start](#Quick-Start)
+* [User Guide](#User-Guide)
+* [CLI Reference](#CLI-Reference)
+    * [dfget](./cli_reference/dfget.md)
+    * [dfdaemon](./cli_reference/dfdaemon.md)
+    * [supernode]()
+* [API Reference](#API-Reference)
+* [Ecosystem](#Ecosystem)
+    * [Kubernetes Integration](./ecosystem/Kubernetes-with-Dragonfly.md)
+    * [Harbor Integration](./ecosystem/Harbor-with-Dragonfly.md)
+* [Developer Guide](#Developer-Guide)
+    * [Design Doc](#Design-Doc)
+    * [Test Guide](#Test-Guide)
 
-- [Introduction](#introduction)
-- [Features](#features)
-- [Comparison](#comparison) 
-- [Documents](./documents.md)
-- [Contributing](./en/CONTRIBUTING.md)
-- [LICENSE](./en/LICENSE)
-- [Commercial Support](#commercial-support)
+## Quick Start
 
-## Introduction
+[Quick Started](./quick_start) is exactly what you need if you would give Dragonfly a try. This document includes what are the prerequisites, how to install Dragonfly and how to experience Dragonfly's usage.
 
-Dragonfly is an intelligent P2P based file distribution system. It resolves issues like low-efficiency, low-success rate and waste of network bandwidth in large-scale file distribution scenarios such as application deployment, large-scale cache file distribution, data file distribution, image distribution etc.
-In Alibaba, the system transfers 2 billion times and distributes 3.4PB data every month, it becomes one of the most important infrastructures in Alibaba. The reliability is up to 99.9999%.
+## User Guide
 
+[User Guide](./user_guide) helps all kinds of guidance end users need to experience Dragonfly. Not only the very brief [Quick Start](./quick_start), but the detailed binary installation and configure illustration. In addition, any concept and function which help users understand Dragonfly better would be included as well.
 
-DevOps takes a lot of benefits from container technologies, but at the same time, it also brings a lot of challenges: the efficiency of image distribution, especially when you have a lot of applications and require image distribution at the same time. Dragonfly works extremely well with  both Docker and [Pouch](https://github.com/alibaba/pouch), and actually we are compatible with any other container technologies without any modifications of container engine.
+## CLI Reference
 
-It delivers up to 57 times the throughput of native docker and saves up to 99.5% the out bandwidth of registry.
+For almost all users, commandline is the first reference you may need. Document in directory [CLI Reference](./cli_reference) is about command detailed usage of Dragonfly CLI including `dfget`, `dfdaemon` and `supernode`. You can get introductions, synopsis, examples, options about command. Last but not least, Dragonfly can guarantee commandline docs is strongly consistent with Dragonfly CLI's source code. What's more, all commandline docs are auto generated via source code.
 
-Dragonfly makes it simple and cost-effective to set up, operate, and scale any kind of files/images/data distribution.
+## API Reference
 
-## Features
-*The project is an open source version of the dragonfly and more internal features will be gradually opened*.
+Commandline is the easiest way to experience Dragonfly's ability. And API extension will bring more furthure experience of Dragonfly. Commandline is just one kind of combination usage of API, if you wish to hack or take more advantages of Dragonfly, please see [API Reference](./api_reference). Like command line document, all API docs are auto generated via source code.
 
-- **P2P based file distribution**: Using P2P technology for file transmission, which can make full use of the bandwidth resources of each peer to improve download efficiency,  saves a lot of cross-IDC bandwidth, especially costly cross-board bandwidth
-- **Non-invasive support all kinds of container technologies**: Dragonfly can seamlessly support various containers for distributing images.
-- **Host level speed limit**: Many downloading tools(wget/curl) only have rate limit for the current download task,but dragonfly
-also provides rate limit for the entire host.
-- **Passive CDN**: The CDN mechanism can avoid repetitive remote downloads.
-- **Strong consistency**： Dragonfly can guarantee that all downloaded files must be consistent even if users do not provide any check code(MD5).
-- **Disk protection and high efficient IO**: Precheck Disk space, delay synchronization, write file-block in the best order,
-split net-read / disk-write, and so on.
-- **High performance**: Cluster Manager is completely closed-loop, which means, it does not rely on any DB or distributed cache,
-processing requests with extremely high performance. 
-- **Exception auto isolation**: Dragonfly will automatically isolate exception nodes(peer or Cluster Manager) to improve download stability.
-- **No pressure on file source**: Generally, as long as a few Cluster Managers download file from the source.
-- **Support standard http header**: Support http header, Submit authentication information through http header.
-- **Effective concurrency control of Registry Auth**: Reduce the pressure of the Registry Auth Service.
-- **Simple and easy to use**: Very few configurations are needed.
+## Ecosystem
 
-## Comparison
+Ecosystem documents show connections between Dragonfly and popular tool or system in cloud native ecosystem. They guide end users how to experience cloud native systems with Dragonfly, such as other CNCF project Kubernetes and Harbor.
 
-|Test Environment ||
-|--------------------|-------------------|
-|Dragonfly server|2 * (24core 64GB 2000Mb/s)|
-|File Source server|2 * (24core 64GB 2000Mb/s)|
-|Client|4core 8GB 200Mb/s|
-|Target file size|200MB|
-|Executed Date|2016-04-20|
+## Developer Guide
 
-<div>
-<img src="./images/performance.png"/>
-</div>
+Develop Guide helps (potential) developers/contributors to understand the thoery inside Dragonfly rather than the interface it exposes. With better understanding of how Dragonfly is designed, developer could learn source code of Dragonfly much easier and know how to debug, test and hack.
 
-For Dragonfly, no matter how many clients issue the file downloading, the average downloading time is always around 12 seconds.
-And for wget, the downloading time keeps increasing when you have more clients, and as the amount of wget clients reaches 1200, the file source will crash, then it can not serve any client.
+### Design Doc
 
-## License
+[Design Doc](./design) is content all about deisgn of Dragonfly. It includes all things taken into consideration at the very beginning, the architecture designed for all components in Dragonfly, the interactive workflow between components, all APIs in Dragonfly and some technical things else.
 
-Dragonfly is available under the [Apache 2.0 License](https://github.com/alibaba/Dragonfly/blob/master/LICENSE).
+### Test Guide
 
-## Commercial Support
+[Test Guide](./test_guide) is the best reference helping contributors get aware of how to setup testing environment and do it. Currently we can divide test of Dragonfly into four dimensions:
 
-If you need commercial support of Dragonfly, please contact us for more information: [云效](https://www.aliyun.com/product/yunxiao).
+* unit test;
+* API integration test;
+* CLI integration test;
+* node e2e test.
 
-Dragonfly is already integrated with AliCloud Container Services
-If you need commercial support of AliCloud Container Service, please contact us for more information: [Container Service
-](https://www.alibabacloud.com/product/container-service)
+For more details, please refer to [test](./test_guide).
+
+## Conclusion
+
+The folder `/docs` does not contain all the document about Dragonfly. There are still other really helpful documents in other path of this repo, like:
+
+* [FAQ.md](../FAQ.md)
+* [CHANGELOG.md](../CHANGELOG.md)
+* [ROADMAP.md](../ROADMAP.md)
+* others.
+
+If you are searching some document and find no one, please do not hesitate to [file an ISSUE](https://github.com/dragonflyoss/Dragonfly/issues/new/choose) for help. In addition, if you found that there are some incorrect places or typos in document, please help submit a pull request to correct that.
