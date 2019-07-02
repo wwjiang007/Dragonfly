@@ -24,8 +24,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/dragonflyoss/Dragonfly/common/constants"
@@ -115,8 +113,7 @@ func prepare(cfg *config.Config) (err error) {
 }
 
 func launchPeerServer(cfg *config.Config) (err error) {
-	var port = 0
-	port, err = uploader.StartPeerServerProcess(cfg)
+	port, err := uploader.StartPeerServerProcess(cfg)
 	if err == nil && port > 0 {
 		cfg.RV.PeerPort = port
 	}
@@ -251,15 +248,11 @@ func adjustSupernodeList(nodes []string) []string {
 
 func checkConnectSupernode(nodes []string) (localIP string) {
 	var (
-		e    error
-		port = 8002
+		e error
 	)
 	for _, n := range nodes {
-		nodeFields := strings.Split(n, ":")
-		if len(nodeFields) == 2 {
-			port, _ = strconv.Atoi(nodeFields[1])
-		}
-		if localIP, e = cutil.CheckConnect(nodeFields[0], port, 1000); e == nil {
+		ip, port := cutil.GetIPAndPortFromNode(n, config.DefaultSupernodePort)
+		if localIP, e = cutil.CheckConnect(ip, port, 1000); e == nil {
 			return localIP
 		}
 		logrus.Errorf("Connect to node:%s error: %v", n, e)

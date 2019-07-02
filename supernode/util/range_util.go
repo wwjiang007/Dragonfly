@@ -59,7 +59,7 @@ func CalculatePieceNum(rangeStr string) int {
 // the end is calculated by rangeLength which is passed in by the caller itself.
 func CalculateBreakRange(startPieceNum, pieceContSize int, rangeLength int64) (string, error) {
 	// This method is to resume downloading from break-point,
-	// so there is no need to call this function when the startPieceNumit equals to 0.
+	// so there is no need to call this function when the startPieceNum equals to 0.
 	// It is recommended to check this value before calling this function.
 	if startPieceNum <= 0 {
 		return "", fmt.Errorf("startPieceNum is illegal for value: %d", startPieceNum)
@@ -81,7 +81,7 @@ func CalculateBreakRange(startPieceNum, pieceContSize int, rangeLength int64) (s
 // with the following formula:
 //     start = pieceNum * pieceSize
 //     end = start + pieceSize - 1
-func CalculatePieceRange(pieceNum, pieceSize int) string {
+func CalculatePieceRange(pieceNum int, pieceSize int32) string {
 	startIndex := int64(pieceNum) * int64(pieceSize)
 	endIndex := startIndex + int64(pieceSize) - 1
 	return strconv.FormatInt(startIndex, 10) + separator + strconv.FormatInt(endIndex, 10)

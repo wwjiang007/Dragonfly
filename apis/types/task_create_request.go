@@ -71,11 +71,21 @@ type TaskCreateRequest struct {
 	//
 	Path string `json:"path,omitempty"`
 
+	// PeerID is used to uniquely identifies a peer which will be used to create a dfgetTask.
+	// The value must be the value in the response after registering a peer.
+	//
+	PeerID string `json:"peerID,omitempty"`
+
 	// The is the resource's URL which user uses dfget to download. The location of URL can be anywhere, LAN or WAN.
 	// For image distribution, this is image layer's URL in image registry.
 	// The resource url is provided by command line parameter.
 	//
 	RawURL string `json:"rawURL,omitempty"`
+
+	// taskURL is generated from rawURL. rawURL may contains some queries or parameter, dfget will filter some queries via
+	// --filter parameter of dfget. The usage of it is that different rawURL may generate the same taskID.
+	//
+	TaskURL string `json:"taskURL,omitempty"`
 }
 
 // Validate validates this task create request

@@ -39,7 +39,8 @@ type TaskInfo struct {
 	//
 	Dfdaemon bool `json:"dfdaemon,omitempty"`
 
-	// The length of the file dfget requests to download in bytes.
+	// The length of the file dfget requests to download in bytes
+	// which including the header and the trailer of each piece.
 	//
 	FileLength int64 `json:"fileLength,omitempty"`
 
@@ -49,6 +50,10 @@ type TaskInfo struct {
 	// from source server as user's wish.
 	//
 	Headers map[string]string `json:"headers,omitempty"`
+
+	// The length of the source file in bytes.
+	//
+	HTTPFileLength int64 `json:"httpFileLength,omitempty"`
 
 	// special attribute of remote source file. This field is used with taskURL to generate new taskID to
 	// identify different downloading task of remote source file. For example, if user A and user B uses
@@ -64,12 +69,6 @@ type TaskInfo struct {
 	//
 	Md5 string `json:"md5,omitempty"`
 
-	// path is used in one peer A for uploading functionality. When peer B hopes
-	// to get piece C from peer A, B must provide a URL for piece C.
-	// Then when creating a task in supernode, peer A must provide this URL in request.
-	//
-	Path string `json:"path,omitempty"`
-
 	// The size of pieces which is calculated as per the following strategy
 	// 1. If file's total size is less than 200MB, then the piece size is 4MB by default.
 	// 2. Otherwise, it equals to the smaller value between totalSize/100MB + 2 MB and 15MB.
@@ -84,6 +83,12 @@ type TaskInfo struct {
 	// The resource url is provided by command line parameter.
 	//
 	RawURL string `json:"rawURL,omitempty"`
+
+	// when supernode finishes downloading file/image from the source location,
+	// the md5 sum of the source file will be calculated as the value of the realMd5.
+	// And it will be used to compare with md5 value to check whether this is a valid file.
+	//
+	RealMd5 string `json:"realMd5,omitempty"`
 
 	// taskURL is generated from rawURL. rawURL may contains some queries or parameter, dfget will filter some queries via
 	// --filter parameter of dfget. The usage of it is that different rawURL may generate the same taskID.

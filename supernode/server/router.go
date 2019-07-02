@@ -7,7 +7,6 @@ import (
 	"net/http/pprof"
 
 	"github.com/dragonflyoss/Dragonfly/apis/types"
-	result "github.com/dragonflyoss/Dragonfly/supernode/result"
 
 	"github.com/gorilla/mux"
 )
@@ -22,6 +21,13 @@ func initRoute(s *Server) *mux.Router {
 		// system
 		{Method: http.MethodGet, Path: "/_ping", HandlerFunc: s.ping},
 
+		// v0.3
+		{Method: http.MethodPost, Path: "/peer/registry", HandlerFunc: s.registry},
+		{Method: http.MethodGet, Path: "/peer/task", HandlerFunc: s.pullPieceTask},
+		{Method: http.MethodGet, Path: "/peer/piece/suc", HandlerFunc: s.reportPiece},
+		{Method: http.MethodGet, Path: "/peer/service/down", HandlerFunc: s.reportServiceDown},
+
+		// v1
 		// peer
 		{Method: http.MethodPost, Path: "/peers", HandlerFunc: s.registerPeer},
 		{Method: http.MethodDelete, Path: "/peers/{id}", HandlerFunc: s.deRegisterPeer},
@@ -89,7 +95,7 @@ func HandleErrorResponse(w http.ResponseWriter, err error) {
 
 	// By default, daemon side returns code 500 if error happens.
 	code = http.StatusInternalServerError
-	errMsg = result.NewResultInfoWithError(err).Error()
+	errMsg = NewResultInfoWithError(err).Error()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

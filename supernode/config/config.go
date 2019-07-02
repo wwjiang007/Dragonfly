@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v2"
 
@@ -34,11 +36,43 @@ func (c *Config) String() string {
 	return ""
 }
 
+// SetCIDPrefix sets a string as the prefix for supernode CID
+// which used to distinguish from the other peer nodes.
+func (c *Config) SetCIDPrefix(ip string) {
+	c.cIDPrefix = fmt.Sprintf("cdnnode:%s~", ip)
+}
+
+// GetSuperCID returns the cid string for taskID.
+func (c *Config) GetSuperCID(taskID string) string {
+	return fmt.Sprintf("%s%s", c.cIDPrefix, taskID)
+}
+
+// IsSuperCID returns whether the clientID represents supernode.
+func (c *Config) IsSuperCID(clientID string) bool {
+	return strings.HasPrefix(clientID, c.cIDPrefix)
+}
+
+// SetSuperPID sets the value of supernode PID.
+func (c *Config) SetSuperPID(pid string) {
+	c.superNodePID = pid
+}
+
+// GetSuperPID returns the pid string for supernode.
+func (c *Config) GetSuperPID() string {
+	return c.superNodePID
+}
+
+// IsSuperPID returns whether the peerID represents supernode.
+func (c *Config) IsSuperPID(peerID string) bool {
+	return peerID == c.superNodePID
+}
+
 // NewBaseProperties create a instant with default values.
 func NewBaseProperties() *BaseProperties {
 	home := filepath.Join(string(filepath.Separator), "home", "admin", "supernode")
 	return &BaseProperties{
 		ListenPort:              8002,
+		DownloadPort:            8001,
 		HomeDir:                 home,
 		SchedulerCorePoolSize:   10,
 		DownloadPath:            filepath.Join(home, "repo", "download"),
@@ -57,8 +91,12 @@ func NewBaseProperties() *BaseProperties {
 // BaseProperties contains all basic properties of supernode.
 type BaseProperties struct {
 	// ListenPort is the port supernode server listens on.
-	// default:
+	// default: 8002
 	ListenPort int `yaml:"listenPort"`
+
+	// DownloadPort is the port for download files from supernode.
+	// default: 8001
+	DownloadPort int `yaml:"downloadPort"`
 
 	// HomeDir is working directory of supernode.
 	// default: /home/admin/supernode
@@ -124,4 +162,19 @@ type BaseProperties struct {
 	// Whether to open DEBUG level
 	// default: false
 	Debug bool `yaml:"debug"`
+
+	// AdvertiseIP is used to set the ip that we advertise to other peer in the p2p-network.
+	// By default, the first non-loop address is advertised.
+	AdvertiseIP string `yaml:"advertiseIP"`
+
+	// cIDPrefix s a prefix string used to indicate that the CID is supernode.
+	cIDPrefix string
+
+	// superNodePID is the ID of supernode, which is the same as peer ID of dfget.
+	superNodePID string
+}
+
+// TransLimit trans rateLimit from MB/s to B/s.
+func TransLimit(rateLimit int) int {
+	return rateLimit * 1024 * 1024
 }

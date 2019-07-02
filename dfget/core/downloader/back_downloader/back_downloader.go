@@ -98,10 +98,14 @@ func (bd *BackDownloader) Run() error {
 	bd.tempFileName = f.Name()
 	defer f.Close()
 
-	if resp, err = cutil.HTTPGetWithHeaders(bd.URL, downloader.ConvertHeaders(bd.cfg.Header)); err != nil {
+	if resp, err = cutil.HTTPGet(bd.URL, cutil.ConvertHeaders(bd.cfg.Header)); err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if !bd.isSuccessStatus(resp.StatusCode) {
+		return fmt.Errorf("failed to download from source, response code:%d", resp.StatusCode)
+	}
 
 	buf := make([]byte, 512*1024)
 	reader := cutil.NewLimitReader(resp.Body, bd.cfg.LocalLimit, bd.Md5 != "")
@@ -128,4 +132,8 @@ func (bd *BackDownloader) Cleanup() {
 		cutil.DeleteFile(bd.tempFileName)
 	}
 	bd.cleaned = true
+}
+
+func (bd *BackDownloader) isSuccessStatus(code int) bool {
+	return code < 400
 }

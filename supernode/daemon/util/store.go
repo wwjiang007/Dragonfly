@@ -28,17 +28,17 @@ func (s *Store) Put(key string, value interface{}) error {
 func (s *Store) Get(key string) (interface{}, error) {
 	v, ok := s.metaMap.Load(key)
 	if !ok {
-		return nil, errors.Wrapf(errorType.ErrDataNotFound, "key: %v", key)
+		return nil, errors.Wrapf(errorType.ErrDataNotFound, "key (%s)", key)
 	}
 
 	return v, nil
 }
 
-// Delete a key-value pair from the store with sepcified key.
+// Delete a key-value pair from the store with specified key.
 func (s *Store) Delete(key string) error {
 	_, ok := s.metaMap.Load(key)
 	if !ok {
-		return errors.Wrapf(errorType.ErrDataNotFound, "key: %v", key)
+		return errors.Wrapf(errorType.ErrDataNotFound, "key (%s)", key)
 	}
 
 	s.metaMap.Delete(key)

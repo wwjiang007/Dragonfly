@@ -82,6 +82,10 @@ func runDfget() error {
 		util.Printer.Println(err.Error())
 		return err
 	}
+	if err := handleNodes(); err != nil {
+		util.Printer.Println(err.Error())
+		return err
+	}
 
 	checkParameters()
 	logrus.Infof("get cmd params:%q", os.Args)
@@ -205,7 +209,7 @@ func initFlags() {
 	flagSet.StringSliceVar(&cfg.Header, "header", nil,
 		"http header, eg: --header='Accept: *' --header='Host: abc'")
 	flagSet.StringSliceVarP(&cfg.Node, "node", "n", nil,
-		"specify the addresses(IP:port) of supnernodes")
+		"specify the addresses(IP:port) of supernodes")
 	flagSet.BoolVar(&cfg.Notbs, "notbs", false,
 		"disable back source downloading for requested file when p2p fails to download it")
 	flagSet.BoolVar(&cfg.DFDaemon, "dfdaemon", false,
@@ -258,6 +262,21 @@ func transFilter(filter string) []string {
 		return nil
 	}
 	return strings.Split(filter, "&")
+}
+
+func handleNodes() error {
+	nodes := make([]string, 0)
+
+	for _, v := range cfg.Node {
+		// TODO: check the validity of v.
+		if strings.IndexByte(v, ':') > 0 {
+			nodes = append(nodes, v)
+			continue
+		}
+		nodes = append(nodes, fmt.Sprintf("%s:%d", v, config.DefaultSupernodePort))
+	}
+	cfg.Node = nodes
+	return nil
 }
 
 func resultMsg(cfg *config.Config, end time.Time, e *errors.DfError) string {

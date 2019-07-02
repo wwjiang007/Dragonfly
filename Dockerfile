@@ -1,20 +1,19 @@
-FROM golang:1.10.4-alpine as builder
+FROM golang:1.12.6-alpine as builder
 
 WORKDIR /go/src/github.com/dragonflyoss/Dragonfly
-COPY . /go/src/github.com/dragonflyoss/Dragonfly
-
 RUN apk --no-cache add bash make gcc libc-dev git
 
-# go build dfdaemon and dfget.
-# write the resulting executable to the dir /dfclient.
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o /dfclient/dfdaemon cmd/dfdaemon/main.go
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o /dfclient/dfget cmd/dfget/main.go
+COPY . /go/src/github.com/dragonflyoss/Dragonfly
+
+# make build dfdaemon and dfget.
+# write the resulting executable to the dir /opt/dragonfly/df-client.
+RUN make build-client && make install-client
 
 FROM alpine:3.8
 
 RUN apk --no-cache add ca-certificates bash
 
-COPY --from=builder /dfclient /dfclient
+COPY --from=builder /opt/dragonfly/df-client /opt/dragonfly/df-client
 
 # dfdaemon will listen 65001 in default.
 EXPOSE 65001
@@ -22,4 +21,4 @@ EXPOSE 65001
 # use the https://index.docker.io as default registry.
 CMD [ "--registry", "https://index.docker.io" ]
 
-ENTRYPOINT [ "/dfclient/dfdaemon" ]
+ENTRYPOINT [ "/opt/dragonfly/df-client/dfdaemon" ]

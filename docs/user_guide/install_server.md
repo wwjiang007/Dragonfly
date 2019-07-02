@@ -1,10 +1,6 @@
----
-title: "Installing Server"
-weight: 1
----
+# Installing Server
 
 This topic explains how to install the Dragonfly server.
-<!--more-->
 
 **Tip:** For a data center or a cluster, we recommend that you use at least two machines with eight cores, 16GB RAM and Gigabit Ethernet connections for deploying supernodes.
 
@@ -50,7 +46,7 @@ Nginx|0.8+
 3. Build the Docker image.
 
     ```sh
-    make build-supernode
+    make build-supernode-java
     ```
 
 4. Obtain the latest Docker image ID of the supernode.
@@ -97,7 +93,7 @@ Nginx|0.8+
 
     **Tip:** The path of the Nginx configuration file is something like `src/supernode/src/main/docker/sources/nginx.conf`.
 
-    ```
+    ```conf
     server {
     listen 8001;
     location / {

@@ -16,6 +16,9 @@
 # with docker.
 USE_DOCKER?=0 # Default: build components in the local environment.
 
+# Assign the Dragonfly version to DF_VERSION as the image tag.
+DF_VERSION?=latest # Default: use latest as the image tag which built by docker.
+
 clean:
 	@echo "Begin to clean redundant files."
 	@rm -rf ./bin
@@ -27,39 +30,84 @@ build-dirs:
 .PHONY: build-dirs
 
 build: build-dirs
-	@echo "Begin to build dfget and dfdaemon and supernode."
-	./hack/build-supernode.sh 
-	./hack/build-client.sh
+	@echo "Begin to build dfget and dfdaemon and supernode." 
+	./hack/build.sh
 .PHONY: build
+
+build-java: build-client
+	@echo "Begin to build dfget and dfdaemon and java version supernode." 
+	./hack/build-supernode.sh
+.PHONY: build-java
 
 build-client: build-dirs
 	@echo "Begin to build dfget and dfdaemon."
-	./hack/build-client.sh
+	./hack/build.sh dfget
+	./hack/build.sh dfdaemon
 .PHONY: build-client
 
 build-supernode: build-dirs
 	@echo "Begin to build supernode."
-	./hack/build-supernode.sh 
+	./hack/build.sh supernode
 .PHONY: build-supernode
 
+build-supernode-java: build-dirs
+	@echo "Begin to build java version supernode."
+	./hack/build-supernode.sh
+.PHONY: build-supernode-java
+
 install:
-	@echo "Begin to install dfget and dfdaemon."
-	./hack/install-client.sh install
+	@echo "Begin to install dfget and dfdaemon and supernode."
+	./hack/install.sh install
 .PHONY: install
 
+install-client:
+	@echo "Begin to install dfget and dfdaemon."
+	./hack/install.sh install dfclient
+.PHONY: install-client
+
+install-supernode:
+	@echo "Begin to install supernode."
+	./hack/install.sh install supernode
+.PHONY: install-supernode
+
 uninstall:
-	@echo "Begin to uninstall dfget and dfdaemon."
-	./hack/install-client.sh uninstall
+	@echo "Begin to uninstall dfget and dfdaemon and supernode."
+	./hack/install.sh uninstall
 .PHONY: uninstall
+
+uninstall-client:
+	@echo "Begin to uninstall dfget and dfdaemon."
+	./hack/install.sh uninstall-dfclient
+.PHONY: uninstall-client
+
+uninstall-supernode:
+	@echo "Begin to uninstall supernode."
+	./hack/install.sh uninstall-supernode
+.PHONY: uninstall-supernode
+
+docker-build:
+	@echo "Begin to use docker build dfcient and supernode images."
+	./hack/docker-build.sh
+.PHONY: docker-build
+
+docker-build-client:
+	@echo "Begin to use docker build dfcient image."
+	./hack/docker-build.sh dfclient 
+.PHONY: docker-build-client
+
+docker-build-supernode:
+	@echo "Begin to use docker build supernode image."
+	./hack/docker-build.sh supernode
+.PHONY: docker-build-supernode
 
 unit-test: build-dirs
 	./hack/unit-test.sh
 .PHONY: unit-test
 
 check:
-	@echo "Begin to check client code formats."
-	./hack/check-client.sh	
-	@echo "Begin to check supernode code formats."
+	@echo "Begin to check code formats."
+	./hack/check.sh	
+	@echo "Begin to check java version supernode code formats."
 	./hack/check-supernode.sh
 .PHONY: check
 
@@ -80,3 +128,12 @@ release:
 	./hack/package.sh
 .PHONY: release
 
+df.key:
+	openssl genrsa -des3 -passout pass:x -out df.pass.key 2048
+	openssl rsa -passin pass:x -in df.pass.key -out df.key
+	rm df.pass.key
+
+df.crt: df.key
+	openssl req -new -key df.key -out df.csr
+	openssl x509 -req -sha256 -days 365 -in df.csr -signkey df.key -out df.crt
+	rm df.csr
