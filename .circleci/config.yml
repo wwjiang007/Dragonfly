@@ -1,27 +1,33 @@
-# Golang CircleCI 2.0 configuration file
-#
-# Check https://circleci.com/docs/2.0/language-go/ for more details
-version: 2
+# Golang CircleCI 2.1 configuration file
+---
+version: 2.1
+
+orbs:
+  # See https://circleci.com/orbs/registry/orb/circleci/go.
+  go: circleci/go@0.2.0
+
 jobs:
-  markdownlint-misspell-shellcheck:
+  linters-check:
     docker:
-      # this image is build from Dockerfile
+      # this image is built from Dockerfile
       # https://github.com/pouchcontainer/pouchlinter/blob/master/Dockerfile
-      - image: pouchcontainer/pouchlinter:v0.1.2
+      - image: dragonflyoss/linter:v0.2.7
     working_directory: /go/src/github.com/dragonflyoss/Dragonfly
     steps:
       - checkout
+      - go/load-cache
       - run:
           name: use markdownlint v0.5.0 to lint markdown file (https://github.com/markdownlint/markdownlint)
           command: |
-            find  ./ -name  "*.md" | grep -v vendor | grep -v commandline |  grep -v .github |  grep -v swagger |  grep -v api |  xargs mdl -r ~MD002,~MD007,~MD010,~MD013,~MD024,~MD026,~MD029,~MD033,~MD034,~MD036,~MD046
+            find  ./ -name  "*.md" | grep -v commandline |  grep -v .github |  grep -v swagger |  grep -v api |  xargs mdl -r ~MD002,~MD007,~MD010,~MD013,~MD024,~MD026,~MD029,~MD033,~MD034,~MD036,~MD046
       - run:
           name: use markdown-link-check(https://github.com/tcort/markdown-link-check) to check links in markdown files
           command: |
             set +e
-            for name in $(find . -name \*.md | grep -v vendor | grep -v CHANGELOG); do
+            curl -OfsSL https://raw.githubusercontent.com/dragonflyoss/dragonfly-scripts/master/config/markdown-link-check-scripts.json
+            for name in $(find . -name \*.md | grep -v CHANGELOG); do
               if [ -f $name ]; then
-                markdown-link-check -q $name;
+                markdown-link-check -q -v -c ./markdown-link-check-scripts.json $name;
                 if [ $? -ne 0 ]; then
                   code=1
                 fi
@@ -31,46 +37,44 @@ jobs:
       - run:
           name: use opensource tool client9/misspell to correct commonly misspelled English words
           command: |
-            find  ./* -name  "*"  | grep -v vendor | xargs misspell -error
+            find  . -name  "*" | xargs misspell -error
+      - run:
+          name: use yamllint tool to check the format of all yaml files
+          command: |
+            find . -name "*.yml" | xargs yamllint -d "{extends: default, rules: {line-length: disable}}"
       - run:
           name: use ShellCheck (https://github.com/koalaman/shellcheck) to check the validateness of shell scripts in pouch repo
           command: |
-            find ./ -name "*.sh" | grep -v vendor | xargs shellcheck
-
-  gocode-check-via-gometalinter-swagger:
-    docker:
-      - image: pouchcontainer/pouchlinter:v0.1.2
-    working_directory: /go/src/github.com/dragonflyoss/Dragonfly
-    steps:
-      - checkout
+            find . -name "*.sh" | xargs shellcheck
+      - run:
+          name: validate go mod files
+          command: |
+            make check-go-mod
       - run:
           name: validate swagger.yml
           command: |
             swagger validate "/go/src/github.com/dragonflyoss/Dragonfly/apis/swagger.yml"
       - run:
-          name: use gometalinter to check gocode of this project.
+          name: use golangci-lint to check gocode of this project.
           command: |
-            gometalinter --disable-all --cyclo-over=20 --skip vendor -E gofmt -E goimports -E golint -E misspell -E vet -E goconst -E gocyclo ./...
+            make golangci-lint
       - run:
-          name: detect deadcode without test folder
+          name: boilerplate check
           command: |
-            gometalinter --disable-all --skip vendor --skip test -E deadcode ./...
-  
+            make boilerplate-check
+      - go/save-cache
+
   unit-test-golang:
     docker:
-      - image: circleci/golang:1.12.6
+      - image: circleci/golang:1.12.10
     working_directory: /go/src/github.com/dragonflyoss/Dragonfly
     steps:
       - checkout
+      - go/load-cache
       - run:
           name: build client
           command: |
-            cd cmd
-            cd dfget && go build
-            cd ..
-            cd dfdaemon && go build
-            cd ..
-            cd supernode && go build
+            make build
       - run:
           name: unit test
           command: make unit-test
@@ -80,44 +84,83 @@ jobs:
       - run:
           name: rm coverage.txt
           command: rm coverage.txt
+      - go/save-cache
 
-  api-integration-test-java:
+  api-integration-test:
     docker:
-      - image: circleci/golang:1.12.6
+      - image: circleci/golang:1.12.10
     working_directory: /go/src/github.com/dragonflyoss/Dragonfly
     steps:
       - checkout
-      - run:
-          name: start supernode daemon background & run all integration test cases in test
-          command: |
-            echo "install maven and jdk8"
-            sudo apt-get update > /dev/null 2>&1
-            sudo apt-get install openjdk-8-jdk maven > /dev/null 2>&1
-            echo "building..."
-            make build-java > /dev/null
-            echo "start integration test with java version supernode..."
-            go test ./test --args --java-version=true
-
-  api-integration-test-golang:
-    docker:
-      - image: circleci/golang:1.12.6
-    working_directory: /go/src/github.com/dragonflyoss/Dragonfly
-    steps:
-      - checkout
+      - go/load-cache
       - run:
           name: build dragonfly & run all integration test cases in test
           command: |
             echo "building..."
             make build > /dev/null
             echo "start integration test..."
-            go test ./test
-           
+            make integration-test
+      - go/save-cache
+
+  release:
+    docker:
+      - image: circleci/golang:1.12.10
+    working_directory: /go/src/github.com/dragonflyoss/Dragonfly
+    steps:
+      - checkout
+      - go/load-cache
+      # TODO(yeya24): consider a better way to inject build date
+      - run:
+          name: inject build date
+          command: echo 'export DATE=$(date "+%Y%m%d-%H:%M:%S")' >> $BASH_ENV
+      - run: curl -sL https://git.io/goreleaser | bash
+      - go/save-cache
+
+  # TODO(yeya24): Consider changing to use goreleaser to publish images later
+  publish-images:
+    docker:
+      - image: circleci/golang:1.12.10
+    working_directory: /go/src/github.com/dragonflyoss/Dragonfly
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run: echo 'export DF_VERSION=${CIRCLE_TAG:1}' >> $BASH_ENV
+      - go/load-cache
+      - run: make docker-build
+      - run:
+          name: push images
+          command: |
+            echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+            docker tag dfclient:$DF_VERSION dragonflyoss/dfclient:$DF_VERSION
+            docker tag supernode:$DF_VERSION dragonflyoss/supernode:$DF_VERSION
+            docker tag dfclient:$DF_VERSION dragonflyoss/dfclient:latest
+            docker tag supernode:$DF_VERSION dragonflyoss/supernode:latest
+            docker push dragonflyoss/dfclient:$DF_VERSION
+            docker push dragonflyoss/supernode:$DF_VERSION
+            docker push dragonflyoss/dfclient:latest
+            docker push dragonflyoss/supernode:latest
+      - go/save-cache
+
 workflows:
   version: 2
   ci:
     jobs:
-      - markdownlint-misspell-shellcheck
+      - linters-check
       - unit-test-golang
-      - gocode-check-via-gometalinter-swagger
-      - api-integration-test-java
-      - api-integration-test-golang
+      - api-integration-test
+
+  release:
+    jobs:
+      - release:
+          # Only run this job on git tag pushes
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9]+(\.[0-9]+){2}(-.+|[^-.]*)$/
+      - publish-images:
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9]+(\.[0-9]+){2}(-.+|[^-.]*)$/

@@ -18,6 +18,8 @@ package config
 
 import (
 	"time"
+
+	"github.com/dragonflyoss/Dragonfly/pkg/rate"
 )
 
 /* the reason of backing to source */
@@ -48,8 +50,10 @@ const (
 	DefaultYamlConfigFile  = "/etc/dragonfly/dfget.yml"
 	DefaultIniConfigFile   = "/etc/dragonfly.conf"
 	DefaultNode            = "127.0.0.1"
-	DefaultLocalLimit      = 20 * 1024 * 1024
+	DefaultLocalLimit      = 20 * rate.MB
+	DefaultMinRate         = 64 * rate.KB
 	DefaultClientQueueSize = 6
+	DefaultSupernodeWeight = 1
 )
 
 /* http headers */
@@ -111,8 +115,9 @@ const (
 	LocalHTTPPathRate   = "/rate/"
 	LocalHTTPPing       = "/server/ping"
 
-	DataExpireTime  = 3 * time.Minute
-	ServerAliveTime = 5 * time.Minute
+	DataExpireTime         = 3 * time.Minute
+	ServerAliveTime        = 5 * time.Minute
+	DefaultDownloadTimeout = 5 * time.Minute
 
 	DefaultSupernodePort = 8002
 )

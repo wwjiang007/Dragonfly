@@ -13,21 +13,21 @@
 
 - **SuperNode**: SuperNode is a long-running process with two primary responsibilities:
   - It's the tracker and scheduler in the P2P network that choose appropriate downloading net-path for each peer.
-  - It's also a CDN server that caches downloaded data from source to avoid downloading same files from source repeatedly.
+  - It's also a CDN server that caches downloaded data from source to avoid downloading the same files from source repeatedly.
 - **Dfget**: Dfget is the client of Dragonfly used for downloading files. It's similar to using wget. At the same time, it also plays the role of peer, which can transfer data between each other in p2p network.
-- **Dfdaemon**: Dfdaemon establishes a proxy between container engine and registry, as a local long-running process. It filters out layer fetching requests from all requests send by container engine when pulling images, then it uses Dfget to downloading these layers.
+- **Dfdaemon**: Dfdaemon establishes a proxy between container engine and registry, as a local long-running process. It filters out layer fetching requests from all requests send by container engine when pulling images, then it uses Dfget to download these layers.
 - **P2P**: Peer-to-Peer, a distributed application architecture, more info refers to [wiki](https://en.wikipedia.org/wiki/Peer-to-peer).
 - **Task**: A Task will store some meta info about the taskFile, pieces and something else.A Task has a one-to-one correspondence with a file on the disk which is identified by taskID. If you want to download a file from Supernode, you should register a task which means that tell the server about the file info you want to download before actually do it.
 - **DfgetTask**: A DfgetTask represents a download process initiated by Dfget or other clients. When Dfget try to download a file from p2p network, Supernode will create a DfgetTask object for managing the lifecycle of download process.
-- **Peer**: In a P2P network, peers are both suppliers and consumers of resources. So before Dfget downloads a task from Supernode, Dfget will launch a webserver that provides downloaded files for other peers to download in the P2P network and send a `Peer/Register` request to Supernode to join the P2P network. Only after that can Dfget download files from P2P network.
-- **Piece**: A piece is a part of the file that is going to download, which can be interpreted as a block of files. In dragonfly, the downloading file is not transmitted in a whole file, but in pieces.
+- **Peer**: In a P2P network, peers are both suppliers and consumers of resources. So before Dfget begins a download task from Supernode, Dfget will launch a webserver that provides downloaded files service for other peers to download in the P2P network and send a `Peer/Register` request to Supernode to join the P2P network. Only after that can Dfget download files from P2P network.
+- **Piece**: A piece is a part of the file that is going to be downloaded, which can be interpreted as a block of files. In dragonfly, the downloading file is not transmitted in a whole file, but in pieces.
 
 ## API Design
 
 For a program, a well-designed API is very important, we design the APIs with principles in `RESTFUL` as follows:
 
 - Keep each API's responsibilities simple.
-- Provide APIs that cover the full process life cycle. Now we've just exposed the APIs required by the core process, and we'll add the appropriate APIs as needed later.
+- Provide APIs that cover the full process life cycle. Now we've just exposed the APIs required by the core process, and we'll add a more appropriate APIs as needed later.
 - Use resources as the heart of the API, but they do not have to correspond to an actual data object one-by-one. `E.g.` Tasks are resources used by a client to operate, DfgetTasks are for internal implementation which should not be exposed to client.
 - URLs should include nouns, not verbs. In additional, use plural nouns instead of singular nouns. `E.g.` `/peers/{id}: GET`.
 - Use HTTP response status codes to represent the outcome of operations on resources. Please refer to [linker](https://github.com/dragonflyoss/Dragonfly/blob/master/apis/swagger.yml#L793).
@@ -105,7 +105,7 @@ Register to a Supernode
 
 - Dfget should be registered as a peer node before it can download files from the P2P network.
 - In `Dragonfly`, a file is uniquely identified by taskID and a download task is also scheduled according to taskID. So when Dfget needs to tell the Supernode the information about the file to be downloaded to get the taskID before actually starting to download the file.
-  - Supernode will generate a specific taskID based on the information passed by `Dfget`, and check if the file corresponding to taskID exists locally which is managered by CDNMgr.
+  - Supernode will generate a specific taskID based on the information passed by `Dfget`, and check if the file corresponding to taskID exists locally which is managed by CDNMgr.
   - If in the previous check, the corresponding file is not found locally, it will trigger CDN to download the file asynchronously.
   - A download process corresponds to a`DfgetTask` object in the Supernode, so create a new object to track the progress of the download process.
   - Update the bitmap information for the P2P network.
@@ -116,7 +116,7 @@ Download from the p2p network in pieces with a loop
 
 - Dfget should report the info and status of the piece downloaded when each success/fail to download a piece from the P2P network.
   - Supernode will update the bitmap information for the P2P network for better scheduling work.
-- Dfget will not download the the entire file at once but in pieces. So the Supernode will schedule several pieces of information each time for Dfget to download.
+- Dfget will not download the entire file at once but in pieces. So the Supernode will schedule several pieces of information each time for Dfget to download.
   - The scheduler will determine the next scheduling behavior according to certain scheduling rules.
   - Supernode will update the status of DfgetTask when success/fail to download some pieces or the entire download process ends in success/failure.
 

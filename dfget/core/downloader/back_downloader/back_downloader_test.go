@@ -17,18 +17,19 @@
 package downloader
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"net"
 	"net/http"
 	"os"
-	"path"
+	"path/filepath"
 	"testing"
 
-	"github.com/dragonflyoss/Dragonfly/common/util"
 	"github.com/dragonflyoss/Dragonfly/dfget/config"
 	"github.com/dragonflyoss/Dragonfly/dfget/core/helper"
+	"github.com/dragonflyoss/Dragonfly/pkg/fileutils"
 
 	"github.com/go-check/check"
 )
@@ -64,8 +65,8 @@ func (s *BackDownloaderTestSuite) TearDownSuite(c *check.C) {
 }
 
 func (s *BackDownloaderTestSuite) TestBackDownloader_Run(c *check.C) {
-	testFileMd5 := helper.CreateTestFileWithMD5(path.Join(s.workHome, "download.test"), "test downloader")
-	dst := path.Join(s.workHome, "back.test")
+	testFileMd5 := helper.CreateTestFileWithMD5(filepath.Join(s.workHome, "download.test"), "test downloader")
+	dst := filepath.Join(s.workHome, "back.test")
 
 	cfg := helper.CreateConfig(nil, s.workHome)
 	bd := &BackDownloader{
@@ -75,34 +76,34 @@ func (s *BackDownloaderTestSuite) TestBackDownloader_Run(c *check.C) {
 	}
 
 	cfg.Notbs = true
-	c.Assert(bd.Run(), check.NotNil)
+	c.Assert(bd.Run(context.TODO()), check.NotNil)
 
 	cfg.Notbs = false
 	bd.cleaned = false
 	cfg.BackSourceReason = config.BackSourceReasonNoSpace
-	c.Assert(bd.Run(), check.NotNil)
+	c.Assert(bd.Run(context.TODO()), check.NotNil)
 
 	cfg.BackSourceReason = 0
 	bd.cleaned = false
-	c.Assert(bd.Run(), check.IsNil)
+	c.Assert(bd.Run(context.TODO()), check.IsNil)
 
 	bd.cleaned = false
 	bd.Md5 = testFileMd5
-	md5sum := util.Md5Sum(dst)
+	md5sum := fileutils.Md5Sum(dst)
 	c.Assert(testFileMd5, check.Equals, md5sum)
 
 	// test: realMd5 doesn't equal to expectedMd5
 	bd.Md5 = "x"
-	c.Assert(bd.Run(), check.NotNil)
+	c.Assert(bd.Run(context.TODO()), check.NotNil)
 
 	// test: realMd5 equals to expectedMd5
 	bd.cleaned = false
 	bd.Md5 = testFileMd5
-	c.Assert(bd.Run(), check.IsNil)
+	c.Assert(bd.Run(context.TODO()), check.IsNil)
 }
 
 func (s *BackDownloaderTestSuite) TestBackDownloader_Run_NotExist(c *check.C) {
-	dst := path.Join(s.workHome, "back.test")
+	dst := filepath.Join(s.workHome, "back.test")
 
 	cfg := helper.CreateConfig(nil, s.workHome)
 	bd := &BackDownloader{
@@ -111,7 +112,7 @@ func (s *BackDownloaderTestSuite) TestBackDownloader_Run_NotExist(c *check.C) {
 		Target: dst,
 	}
 
-	err := bd.Run()
+	err := bd.Run(context.TODO())
 	c.Check(err, check.NotNil)
 	c.Check(err, check.ErrorMatches, ".*404")
 }

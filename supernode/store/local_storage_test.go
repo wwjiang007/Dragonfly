@@ -22,12 +22,13 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/dragonflyoss/Dragonfly/common/util"
+	"github.com/dragonflyoss/Dragonfly/pkg/fileutils"
+	statutils "github.com/dragonflyoss/Dragonfly/pkg/stat"
 	"github.com/dragonflyoss/Dragonfly/supernode/config"
 	"github.com/dragonflyoss/Dragonfly/supernode/plugins"
 
@@ -54,7 +55,7 @@ func (s *LocalStorageSuite) SetUpSuite(c *check.C) {
 			&config.PluginProperties{
 				Name:    LocalStorageDriver,
 				Enabled: true,
-				Config:  "baseDir: " + path.Join(s.workHome, "repo"),
+				Config:  "baseDir: " + filepath.Join(s.workHome, "repo"),
 			},
 		},
 	}
@@ -269,6 +270,82 @@ func (s *LocalStorageSuite) TestGetPut(c *check.C) {
 
 }
 
+func (s *LocalStorageSuite) TestPutTrunc(c *check.C) {
+	originRaw := &Raw{
+		Key:    "fooTrunc.meta",
+		Offset: 0,
+		Trunc:  true,
+	}
+	originData := "hello world"
+
+	var cases = []struct {
+		truncRaw     *Raw
+		getErrCheck  func(error) bool
+		data         io.Reader
+		expectedData string
+	}{
+		{
+			truncRaw: &Raw{
+				Key:    "fooTrunc.meta",
+				Offset: 0,
+				Trunc:  true,
+			},
+			data:         strings.NewReader("hello"),
+			getErrCheck:  IsNilError,
+			expectedData: "hello",
+		},
+		{
+			truncRaw: &Raw{
+				Key:    "fooTrunc.meta",
+				Offset: 6,
+				Trunc:  true,
+			},
+			data:         strings.NewReader("golang"),
+			getErrCheck:  IsNilError,
+			expectedData: "\x00\x00\x00\x00\x00\x00golang",
+		},
+		{
+			truncRaw: &Raw{
+				Key:    "fooTrunc.meta",
+				Offset: 0,
+				Trunc:  false,
+			},
+			data:         strings.NewReader("foo"),
+			getErrCheck:  IsNilError,
+			expectedData: "foolo world",
+		},
+		{
+			truncRaw: &Raw{
+				Key:    "fooTrunc.meta",
+				Offset: 6,
+				Trunc:  false,
+			},
+			data:         strings.NewReader("foo"),
+			getErrCheck:  IsNilError,
+			expectedData: "hello foold",
+		},
+	}
+
+	for _, v := range cases {
+		err := s.storeLocal.Put(context.Background(), originRaw, strings.NewReader(originData))
+		c.Check(err, check.IsNil)
+
+		err = s.storeLocal.Put(context.Background(), v.truncRaw, v.data)
+		c.Check(err, check.IsNil)
+
+		r, err := s.storeLocal.Get(context.Background(), &Raw{
+			Key: "fooTrunc.meta",
+		})
+		c.Check(err, check.IsNil)
+
+		if err == nil {
+			result, err := ioutil.ReadAll(r)
+			c.Assert(err, check.IsNil)
+			c.Assert(string(result[:]), check.Equals, v.expectedData)
+		}
+	}
+}
+
 func (s *LocalStorageSuite) TestPutParallel(c *check.C) {
 	var key = "fooPutParallel"
 	var routineCount = 4
@@ -320,7 +397,7 @@ func (s *LocalStorageSuite) BenchmarkPutSerial(c *check.C) {
 func (s *LocalStorageSuite) TestManager_Get(c *check.C) {
 	cfg := &config.Config{
 		BaseProperties: &config.BaseProperties{
-			HomeDir: path.Join(s.workHome, "test_mgr"),
+			HomeDir: filepath.Join(s.workHome, "test_mgr"),
 		},
 	}
 	mgr, _ := NewManager(cfg)
@@ -344,15 +421,15 @@ func (s *LocalStorageSuite) checkStat(raw *Raw, c *check.C) {
 	c.Assert(IsNilError(err), check.Equals, true)
 
 	driver := s.storeLocal.driver.(*localStorage)
-	pathTemp := path.Join(driver.BaseDir, raw.Bucket, raw.Key)
+	pathTemp := filepath.Join(driver.BaseDir, raw.Bucket, raw.Key)
 	f, _ := os.Stat(pathTemp)
-	sys, _ := util.GetSys(f)
+	sys, _ := fileutils.GetSys(f)
 
 	c.Assert(info, check.DeepEquals, &StorageInfo{
-		Path:       path.Join(raw.Bucket, raw.Key),
+		Path:       filepath.Join(raw.Bucket, raw.Key),
 		Size:       f.Size(),
 		ModTime:    f.ModTime(),
-		CreateTime: util.Ctime(sys),
+		CreateTime: statutils.Ctime(sys),
 	})
 }
 

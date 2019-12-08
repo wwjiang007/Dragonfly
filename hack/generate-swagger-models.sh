@@ -1,8 +1,12 @@
 #!/bin/bash
 
+set -o nounset
+set -o errexit
+set -o pipefail
+
 # Here is details of the swagger binary we use.
 # $ swagger version
-# version: 0.17.1
+# version: 0.19.0
 
 # Get the absolute path of this file
 DIR="$( cd "$( dirname "$0"  )" && pwd  )"

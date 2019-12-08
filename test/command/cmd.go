@@ -31,15 +31,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dragonflyoss/Dragonfly/common/util"
+	"github.com/dragonflyoss/Dragonfly/pkg/httputils"
 	"github.com/dragonflyoss/Dragonfly/test/environment"
 )
 
 var (
-	dfgetPath       string
-	dfdaemonPath    string
-	supernodePath   string
-	supernodeGoPath string
+	dfgetPath     string
+	dfdaemonPath  string
+	supernodePath string
 )
 
 func init() {
@@ -58,8 +57,7 @@ func init() {
 
 	dfgetPath = fp.Join(binDir, "dfget")
 	dfdaemonPath = fp.Join(binDir, "dfdaemon")
-	supernodePath = fp.Join(sourceDir, "src", "supernode", "target", "supernode.jar")
-	supernodeGoPath = fp.Join(binDir, "supernode")
+	supernodePath = fp.Join(binDir, "supernode")
 }
 
 func checkExist(s string) {
@@ -69,17 +67,13 @@ func checkExist(s string) {
 	}
 }
 
-// NewStarter create an instance of Starter.
+// NewStarter creates an instance of Starter.
 // It checks the binary files whether is existing and creates a temporary
 // directory for testing.
 func NewStarter(name string) *Starter {
 	checkExist(dfgetPath)
 	checkExist(dfdaemonPath)
-	if environment.UseJavaVersion {
-		checkExist(supernodePath)
-	} else {
-		checkExist(supernodeGoPath)
-	}
+	checkExist(supernodePath)
 
 	home, err := ioutil.TempDir("/tmp", "df-"+name+"-")
 	if err != nil {
@@ -128,6 +122,9 @@ type Starter struct {
 	// is killed.
 	fileSrv map[*exec.Cmd]*http.Server
 
+	// supernodeFileServerHome is the home dir of supernode file server.
+	supernodeFileServerHome string
+
 	lock sync.Mutex
 }
 
@@ -135,31 +132,19 @@ func (s *Starter) getCmdGo(dir string, running time.Duration, args ...string) (c
 	args = append([]string{
 		"--home-dir=" + dir,
 		"--port=" + strconv.Itoa(environment.SupernodeListenPort),
+		"--advertise-ip=127.0.0.1",
+		"--download-port=" + strconv.Itoa(environment.SupernodeDownloadPort),
 		"--debug",
 	}, args...)
 
-	return s.execCmd(running, supernodeGoPath, args...)
-}
-
-func (s *Starter) getCmdJava(dir string, running time.Duration, args ...string) (cmd *exec.Cmd, err error) {
-	args = append([]string{
-		"-Dsupernode.baseHome=" + dir,
-		"-Dserver.port=" + strconv.Itoa(environment.SupernodeListenPort),
-		"-jar", supernodePath,
-	}, args...)
-
-	return s.execCmd(running, "java", args...)
+	return s.execCmd(running, supernodePath, args...)
 }
 
 // Supernode starts supernode.
 func (s *Starter) Supernode(running time.Duration, args ...string) (
 	cmd *exec.Cmd, err error) {
 	dir := fp.Join(s.Home, "supernode")
-	if environment.UseJavaVersion {
-		cmd, err = s.getCmdJava(dir, running, args...)
-	} else {
-		cmd, err = s.getCmdGo(dir, running, args...)
-	}
+	cmd, err = s.getCmdGo(dir, running, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -168,11 +153,17 @@ func (s *Starter) Supernode(running time.Duration, args ...string) (
 		s.Kill(cmd)
 		return nil, err
 	}
-	if _, err = s.fileServer(cmd, fp.Join(dir, "repo")); err != nil {
+	s.supernodeFileServerHome = fp.Join(dir, "repo")
+	if _, err = s.fileServer(cmd, s.supernodeFileServerHome, environment.SupernodeDownloadPort); err != nil {
 		s.Kill(cmd)
 		return nil, err
 	}
 	return cmd, err
+}
+
+// WriteSupernodeFileServer writes a file to the supernode file server.
+func (s *Starter) WriteSupernodeFileServer(filePath string, data []byte, perm os.FileMode) error {
+	return ioutil.WriteFile(fp.Join(s.supernodeFileServerHome, filePath), data, perm)
 }
 
 // DFDaemon starts dfdaemon.
@@ -244,7 +235,7 @@ func (s *Starter) kill(cmd *exec.Cmd) {
 	}
 }
 
-// execCmd execute a command.
+// execCmd executes a command.
 // param running indicates that how much time the process can run at most,
 // after the running duration, the process will be killed automatically.
 // When the value of running is less than 0, it will not be killed automatically,
@@ -272,9 +263,9 @@ func (s *Starter) addCmd(cmd *exec.Cmd) {
 	s.listMap[cmd] = el
 }
 
-func (s *Starter) fileServer(cmd *exec.Cmd, root string) (*http.Server, error) {
+func (s *Starter) fileServer(cmd *exec.Cmd, root string, port int) (*http.Server, error) {
 	server := &http.Server{
-		Addr:    ":8001",
+		Addr:    ":" + strconv.Itoa(port),
 		Handler: http.FileServer(http.Dir(root)),
 	}
 	err := make(chan error)
@@ -308,7 +299,7 @@ func check(ip string, port int, timeout time.Duration) (err error) {
 		case err = <-end:
 			return err
 		case <-ticker.C:
-			if _, err = util.CheckConnect(ip, port, 50); err == nil {
+			if _, err = httputils.CheckConnect(ip, port, 50); err == nil {
 				return nil
 			}
 		}
