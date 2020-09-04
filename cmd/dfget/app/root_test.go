@@ -27,6 +27,7 @@ import (
 	"github.com/dragonflyoss/Dragonfly/dfget/config"
 	"github.com/dragonflyoss/Dragonfly/pkg/errortypes"
 	"github.com/dragonflyoss/Dragonfly/pkg/rate"
+
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/suite"
 )
@@ -37,7 +38,7 @@ type dfgetSuit struct {
 
 func (suit *dfgetSuit) Test_initFlagsNoArguments() {
 	initProperties()
-	suit.Equal(cfg.Nodes, []string{"127.0.0.1:8002"})
+	suit.Equal(cfg.Nodes, []string(nil))
 	suit.Equal(cfg.LocalLimit, 20*rate.MB)
 	suit.Equal(cfg.TotalLimit, rate.Rate(0))
 	suit.Equal(cfg.Notbs, false)
@@ -84,11 +85,22 @@ func (suit *dfgetSuit) Test_initProperties() {
 			"--locallimit", v.expected.LocalLimit.String(),
 			"--totallimit", v.expected.TotalLimit.String()})
 		initProperties()
-		suit.EqualValues(cfg.Nodes, config.NodeWightSlice2StringSlice(v.expected.Supernodes))
+		suit.EqualValues(cfg.Nodes, config.NodeWeightSlice2StringSlice(v.expected.Supernodes))
 		suit.Equal(cfg.LocalLimit, v.expected.LocalLimit)
 		suit.Equal(cfg.TotalLimit, v.expected.TotalLimit)
 		suit.Equal(cfg.ClientQueueSize, v.expected.ClientQueueSize)
 	}
+}
+
+func (suit *dfgetSuit) Test_HeaderFlags() {
+	originCfg := *cfg
+	defer func() {
+		cfg = &originCfg
+	}()
+	flagSet := rootCmd.Flags()
+	flagSet.Parse([]string{"--header", "Host: abc", "--header", "Date:Mon, 30 Dec 2019"})
+
+	suit.Equal(cfg.Header, []string{"Host: abc", "Date:Mon, 30 Dec 2019"})
 }
 
 func (suit *dfgetSuit) Test_transFilter() {

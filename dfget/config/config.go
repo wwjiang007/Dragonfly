@@ -62,7 +62,7 @@ type Properties struct {
 	// All weights will be divided by the greatest common divisor in the end.
 	//
 	// E.g. ["192.168.33.21=1", "192.168.33.22=2"]
-	Supernodes []*NodeWight `yaml:"nodes,omitempty" json:"nodes,omitempty"`
+	Supernodes []*NodeWeight `yaml:"nodes,omitempty" json:"nodes,omitempty"`
 
 	// LocalLimit rate limit about a single download task, format: G(B)/g/M(B)/m/K(B)/k/B
 	// pure number will also be parsed as Byte.
@@ -91,8 +91,9 @@ type Properties struct {
 
 // NewProperties creates a new properties with default values.
 func NewProperties() *Properties {
+	// don't set Supernodes as default value, the SupernodeLocator will
+	// do this in a better way.
 	return &Properties{
-		Supernodes:      GetDefaultSupernodesValue(),
 		LocalLimit:      DefaultLocalLimit,
 		MinRate:         DefaultMinRate,
 		ClientQueueSize: DefaultClientQueueSize,
@@ -268,7 +269,7 @@ func AssertConfig(cfg *Config) (err error) {
 	}
 
 	if !netutils.IsValidURL(cfg.URL) {
-		return errors.Wrapf(errortypes.ErrInvalidValue, "url: %v", err)
+		return errors.Wrapf(errortypes.ErrInvalidValue, "url: %v", cfg.URL)
 	}
 
 	if err := checkOutput(cfg); err != nil {
@@ -304,7 +305,7 @@ func checkOutput(cfg *Config) error {
 	for dir := cfg.Output; !stringutils.IsEmptyStr(dir); dir = filepath.Dir(dir) {
 		if err := syscall.Access(dir, syscall.O_RDWR); err == nil {
 			break
-		} else if os.IsPermission(err) {
+		} else if os.IsPermission(err) || dir == "/" {
 			return fmt.Errorf("user[%s] path[%s] %v", cfg.User, cfg.Output, err)
 		}
 	}
@@ -329,6 +330,12 @@ type RuntimeVariable struct {
 
 	// RealTarget specifies the full target path whose value is equal to the `Output`.
 	RealTarget string
+
+	// StreamMode specifies that all pieces will be wrote to a Pipe, currently only support cdn mode.
+	// when StreamMode is true, all data will write directly.
+	// the mode is prepared for this issue https://github.com/dragonflyoss/Dragonfly/issues/1164
+	// TODO: support p2p mode
+	StreamMode bool
 
 	// TargetDir is the directory of the RealTarget path.
 	TargetDir string

@@ -49,7 +49,6 @@ const (
 const (
 	DefaultYamlConfigFile  = "/etc/dragonfly/dfget.yml"
 	DefaultIniConfigFile   = "/etc/dragonfly.conf"
-	DefaultNode            = "127.0.0.1"
 	DefaultLocalLimit      = 20 * rate.MB
 	DefaultMinRate         = 64 * rate.KB
 	DefaultClientQueueSize = 6
@@ -72,8 +71,10 @@ const (
 	StrPieceSize    = "pieceSize"
 	StrDataDir      = "dataDir"
 	StrTotalLimit   = "totalLimit"
+	StrCDNSource    = "cdnSource"
 
-	StrBytes = "bytes"
+	StrBytes   = "bytes"
+	StrPattern = "pattern"
 )
 
 /* piece meta */
@@ -119,7 +120,9 @@ const (
 	ServerAliveTime        = 5 * time.Minute
 	DefaultDownloadTimeout = 5 * time.Minute
 
-	DefaultSupernodePort = 8002
+	DefaultSupernodeSchema = "http"
+	DefaultSupernodeIP     = "127.0.0.1"
+	DefaultSupernodePort   = 8002
 )
 
 /* errors code */
@@ -138,4 +141,8 @@ const (
 
 	// CodeDownloadError represents failed to download file.
 	CodeDownloadError
+)
+
+const (
+	RangeSeparator = "-"
 )

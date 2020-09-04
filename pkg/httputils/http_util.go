@@ -18,16 +18,19 @@ package httputils
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dragonflyoss/Dragonfly/pkg/errortypes"
@@ -51,8 +54,24 @@ const (
 	DefaultTimeout = 500 * time.Millisecond
 )
 
+var (
+	// DefaultBuiltInTransport is the transport for HTTPWithHeaders.
+	DefaultBuiltInTransport *http.Transport
+
+	// DefaultBuiltInHTTPClient is the http client for HTTPWithHeaders.
+	DefaultBuiltInHTTPClient *http.Client
+)
+
 // DefaultHTTPClient is the default implementation of SimpleHTTPClient.
 var DefaultHTTPClient SimpleHTTPClient = &defaultHTTPClient{}
+
+// protocols stores custom protocols
+// key: schema value: transport
+var protocols = sync.Map{}
+
+// validURLSchemas stores valid schemas
+// when call RegisterProtocol, validURLSchemas will be also updated.
+var validURLSchemas = "https?|HTTPS?"
 
 // SimpleHTTPClient defines some http functions used frequently.
 type SimpleHTTPClient interface {
@@ -75,6 +94,25 @@ func init() {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+
+	DefaultBuiltInTransport = &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+			DualStack: true,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	DefaultBuiltInHTTPClient = &http.Client{
+		Transport: DefaultBuiltInTransport,
+	}
+
+	RegisterProtocolOnTransport(DefaultBuiltInTransport)
 }
 
 // ----------------------------------------------------------------------------
@@ -165,7 +203,9 @@ func do(url string, headers map[string]string, timeout time.Duration, rsf reques
 	}
 
 	statusCode = resp.StatusCode()
-	body = resp.Body()
+	data := resp.Body()
+	body = make([]byte, len(data))
+	copy(body, data)
 	return
 }
 
@@ -244,6 +284,10 @@ func HTTPGetWithTLS(url string, headers map[string]string, timeout time.Duration
 
 // HTTPWithHeaders sends an HTTP request with headers and specified method.
 func HTTPWithHeaders(method, url string, headers map[string]string, timeout time.Duration, tlsConfig *tls.Config) (*http.Response, error) {
+	var (
+		cancel func()
+	)
+
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		return nil, err
@@ -253,21 +297,49 @@ func HTTPWithHeaders(method, url string, headers map[string]string, timeout time
 		req.Header.Add(k, v)
 	}
 
-	var transport http.RoundTripper
+	if timeout > 0 {
+		timeoutCtx, cancelFunc := context.WithTimeout(context.Background(), timeout)
+		req = req.WithContext(timeoutCtx)
+		cancel = cancelFunc
+	}
+
+	var c = DefaultBuiltInHTTPClient
+
 	if tlsConfig != nil {
-		transport = &http.Transport{
-			TLSClientConfig: tlsConfig,
+		// copy from http.DefaultTransport
+		transport := &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+				DualStack: true,
+			}).DialContext,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+
+		RegisterProtocolOnTransport(transport)
+		transport.TLSClientConfig = tlsConfig
+
+		c = &http.Client{
+			Transport: transport,
 		}
 	}
 
-	c := &http.Client{
-		Transport: transport,
-	}
-	if timeout > 0 {
-		c.Timeout = timeout
+	res, err := c.Do(req)
+	if err != nil {
+		return nil, err
 	}
 
-	return c.Do(req)
+	if cancel == nil {
+		return res, nil
+	}
+
+	// do cancel() when close the body.
+	res.Body = newWithFuncReadCloser(res.Body, cancel)
+	return res, nil
 }
 
 // HTTPStatusOk reports whether the http response code is 200.
@@ -453,4 +525,48 @@ func handlePairRange(rangeStr string, length int64) (*RangeStruct, error) {
 		StartIndex: startIndex,
 		EndIndex:   endIndex,
 	}, nil
+}
+
+// RegisterProtocol registers custom protocols in global variable "protocols" which will be used in dfget and supernode
+// Example:
+//   protocols := "helloworld"
+//   newTransport := funcNewTransport
+//   httputils.RegisterProtocol(protocols, newTransport)
+// RegisterProtocol must be called before initialise dfget or supernode instances.
+func RegisterProtocol(scheme string, rt http.RoundTripper) {
+	validURLSchemas += "|" + scheme
+	protocols.Store(scheme, rt)
+}
+
+// RegisterProtocolOnTransport registers all new protocols in "protocols" for a special Transport
+// this function will be used in supernode and dfwget
+func RegisterProtocolOnTransport(tr *http.Transport) {
+	protocols.Range(
+		func(key, value interface{}) bool {
+			tr.RegisterProtocol(key.(string), value.(http.RoundTripper))
+			return true
+		})
+}
+
+func GetValidURLSchemas() string {
+	return validURLSchemas
+}
+
+func newWithFuncReadCloser(rc io.ReadCloser, f func()) io.ReadCloser {
+	return &withFuncReadCloser{
+		f:          f,
+		ReadCloser: rc,
+	}
+}
+
+type withFuncReadCloser struct {
+	f func()
+	io.ReadCloser
+}
+
+func (wrc *withFuncReadCloser) Close() error {
+	if wrc.f != nil {
+		wrc.f()
+	}
+	return wrc.ReadCloser.Close()
 }

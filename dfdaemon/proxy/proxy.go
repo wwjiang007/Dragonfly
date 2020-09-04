@@ -18,6 +18,7 @@ package proxy
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -30,8 +31,9 @@ import (
 	"github.com/dragonflyoss/Dragonfly/dfdaemon/config"
 	"github.com/dragonflyoss/Dragonfly/dfdaemon/downloader"
 	"github.com/dragonflyoss/Dragonfly/dfdaemon/downloader/dfget"
+	"github.com/dragonflyoss/Dragonfly/dfdaemon/downloader/p2p"
 	"github.com/dragonflyoss/Dragonfly/dfdaemon/transport"
-
+	"github.com/golang/groupcache/lru"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -72,6 +74,11 @@ func WithCertFromFile(certFile, keyFile string) Option {
 			return errors.Wrap(err, "load cert")
 		}
 		logrus.Infof("use self-signed certificate (%s, %s) for https hijacking", certFile, keyFile)
+		leaf, err := x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			return errors.Wrap(err, "load leaf cert")
+		}
+		cert.Leaf = leaf
 		p.cert = &cert
 		return nil
 	}
@@ -101,6 +108,20 @@ func WithDownloaderFactory(f downloader.Factory) Option {
 	}
 }
 
+func WithStreamMode(streamMode bool) Option {
+	return func(p *Proxy) error {
+		p.streamMode = streamMode
+		return nil
+	}
+}
+
+func WithStreamDownloaderFactory(f downloader.StreamFactory) Option {
+	return func(p *Proxy) error {
+		p.streamDownloadFactory = f
+		return nil
+	}
+}
+
 // New returns a new transparent proxy with the given rules
 func New(opts ...Option) (*Proxy, error) {
 	proxy := &Proxy{
@@ -124,6 +145,10 @@ func NewFromConfig(c config.Properties) (*Proxy, error) {
 		WithDownloaderFactory(func() downloader.Interface {
 			return dfget.NewGetter(c.DFGetConfig())
 		}),
+		WithStreamDownloaderFactory(func() downloader.Stream {
+			return p2p.NewClient(c.DFGetConfig())
+		}),
+		WithStreamMode(c.StreamMode),
 	}
 
 	logrus.Infof("registry mirror: %s", c.RegistryMirror.Remote)
@@ -168,16 +193,21 @@ type Proxy struct {
 	httpsHosts []*config.HijackHost
 	// cert is the certificate used to hijack https proxy requests
 	cert *tls.Certificate
+	// certCache is a in-memory cache store for TLS certs used in HTTPS hijack. Lazy init.
+	certCache *lru.Cache
 	// directHandler are used to handle non proxy requests
 	directHandler http.Handler
 	// downloadFactory returns the downloader used for p2p downloading
-	downloadFactory downloader.Factory
+	downloadFactory       downloader.Factory
+	streamDownloadFactory downloader.StreamFactory
+	streamMode            bool
 }
 
 func (proxy *Proxy) mirrorRegistry(w http.ResponseWriter, r *http.Request) {
 	reverseProxy := httputil.NewSingleHostReverseProxy(proxy.registry.Remote.URL)
 	t, err := transport.New(
 		transport.WithDownloader(proxy.downloadFactory()),
+		transport.WithStreamDownloader(proxy.streamDownloadFactory()),
 		transport.WithTLS(proxy.registry.TLSConfig()),
 		transport.WithCondition(proxy.shouldUseDfgetForMirror),
 	)
@@ -240,6 +270,7 @@ func (proxy *Proxy) handleHTTP(w http.ResponseWriter, req *http.Request) {
 func (proxy *Proxy) roundTripper(tlsConfig *tls.Config) http.RoundTripper {
 	rt, _ := transport.New(
 		transport.WithDownloader(proxy.downloadFactory()),
+		transport.WithStreamDownloader(proxy.streamDownloadFactory()),
 		transport.WithTLS(tlsConfig),
 		transport.WithCondition(proxy.shouldUseDfget),
 	)
@@ -314,7 +345,38 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, r *http.Request) {
 	logrus.Debugln("hijack https request to", r.Host)
 
 	sConfig := new(tls.Config)
-	sConfig.Certificates = []tls.Certificate{*proxy.cert}
+	if proxy.cert.Leaf != nil && proxy.cert.Leaf.IsCA {
+		if proxy.certCache == nil { // Initialize proxy.certCache on first access. (Lazy init)
+			proxy.certCache = lru.New(100) // Default max entries size = 100
+		}
+		logrus.Debugf("hijack https request with CA <%s>", proxy.cert.Leaf.Subject.CommonName)
+		leafCertSpec := LeafCertSpec{
+			proxy.cert.Leaf.PublicKey,
+			proxy.cert.PrivateKey,
+			proxy.cert.Leaf.SignatureAlgorithm}
+		host, _, _ := net.SplitHostPort(r.Host)
+		sConfig.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			cConfig.ServerName = host
+			logrus.Debugf("Generate temporal leaf TLS cert for ServerName <%s>, host <%s>", hello.ServerName, host)
+			// It's assumed that `hello.ServerName` is always same as `host`, in practice.
+			cacheKey := host
+			cached, hit := proxy.certCache.Get(cacheKey)
+			if hit && time.Now().Before(cached.(*tls.Certificate).Leaf.NotAfter) { // If cache hit and the cert is not expired
+				logrus.Debugf("TLS Cache hit, cacheKey = <%s>", cacheKey)
+				return cached.(*tls.Certificate), nil
+			}
+			cert, err := genLeafCert(proxy.cert, &leafCertSpec, host)
+			if err == nil {
+				// Put cert in cache only if there is no error. So all certs in cache are always valid.
+				// But certs in cache maybe expired (After 24 hours, see the default duration of generated certs)
+				proxy.certCache.Add(cacheKey, cert)
+			}
+			// If err != nil, means unrecoverable error happened in genLeafCert(...)
+			return cert, err
+		}
+	} else {
+		sConfig.Certificates = []tls.Certificate{*proxy.cert}
+	}
 
 	sConn, err := handshake(w, sConfig)
 	if err != nil {
@@ -328,7 +390,7 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, r *http.Request) {
 		logrus.Errorf("dial failed for %s: %v", r.Host, err)
 		return
 	}
-	defer cConn.Close()
+	cConn.Close()
 
 	rp := &httputil.ReverseProxy{
 		Director: func(r *http.Request) {
@@ -341,7 +403,8 @@ func (proxy *Proxy) handleHTTPS(w http.ResponseWriter, r *http.Request) {
 	// We have to wait until the connection is closed
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	if err := http.Serve(&singleUseListener{&customCloseConn{sConn, wg.Done}}, rp); err != nil {
+	// NOTE: http.Serve always returns a non-nil error
+	if err := http.Serve(&singleUseListener{&customCloseConn{sConn, wg.Done}}, rp); err != errServerClosed && err != http.ErrServerClosed {
 		logrus.Errorf("failed to accept incoming HTTP connections: %v", err)
 	}
 	wg.Wait()
@@ -393,9 +456,13 @@ type singleUseListener struct {
 	c net.Conn
 }
 
+// errServerClosed is returned by the singleUseListener's Accept method
+// when it receives the subsequent calls after the first Accept call
+var errServerClosed = errors.New("singleUseListener: Server closed")
+
 func (l *singleUseListener) Accept() (net.Conn, error) {
 	if l.c == nil {
-		return nil, errors.New("closed")
+		return nil, errServerClosed
 	}
 	c := l.c
 	l.c = nil

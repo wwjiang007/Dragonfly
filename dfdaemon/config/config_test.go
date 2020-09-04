@@ -20,11 +20,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/dragonflyoss/Dragonfly/dfdaemon/constant"
 	"github.com/dragonflyoss/Dragonfly/pkg/errortypes"
@@ -59,7 +57,7 @@ func (ts *configTestSuite) TestValidatePort() {
 	c := defaultConfig()
 	r := ts.Require()
 
-	for _, p := range []uint{0, 80, 2000, 65536} {
+	for _, p := range []uint{0, 65536} {
 		c.Port = p
 		err := c.Validate()
 		r.NotNil(err)
@@ -68,7 +66,7 @@ func (ts *configTestSuite) TestValidatePort() {
 		r.Equal(constant.CodeExitPortInvalid, de.Code)
 	}
 
-	for _, p := range []uint{2001, 65001, 65535} {
+	for _, p := range []uint{80, 2001, 65001, 65535} {
 		c.Port = p
 		r.Nil(c.Validate())
 	}
@@ -83,17 +81,6 @@ func (ts *configTestSuite) TestValidateDFRepo() {
 
 	c.DFRepo = "tmp"
 	r.Equal(constant.CodeExitPathNotAbs, getCode(c.Validate()))
-}
-
-func (ts *configTestSuite) TestValidateDFPath() {
-	c := defaultConfig()
-	r := ts.Require()
-
-	c.DFPath = "/"
-	r.Nil(c.Validate())
-
-	c.DFPath = fmt.Sprintf("/df-test-%d-%d", time.Now().UnixNano(), rand.Int())
-	r.Equal(constant.CodeExitDfgetNotFound, getCode(c.Validate()))
 }
 
 func (ts *configTestSuite) TestURLNew() {

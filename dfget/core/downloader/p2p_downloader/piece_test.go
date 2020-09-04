@@ -20,6 +20,8 @@ import (
 	"bytes"
 
 	"github.com/go-check/check"
+
+	"github.com/dragonflyoss/Dragonfly/pkg/pool"
 )
 
 type PieceTestSuite struct {
@@ -31,15 +33,48 @@ func init() {
 
 func (s *PieceTestSuite) TestRawContent(c *check.C) {
 	var cases = []struct {
-		piece    *Piece
-		expected *bytes.Buffer
+		piece     *Piece
+		noWrapper bool
+		expected  *bytes.Buffer
 	}{
-		{piece: &Piece{Content: bytes.NewBufferString("")}, expected: nil},
-		{piece: &Piece{Content: bytes.NewBufferString("000010")}, expected: bytes.NewBufferString("1")},
+		{piece: &Piece{Content: pool.NewBufferString("")}, noWrapper: false, expected: nil},
+		{piece: &Piece{Content: pool.NewBufferString("000010")}, noWrapper: false, expected: bytes.NewBufferString("1")},
+		{piece: &Piece{Content: pool.NewBufferString("000020")}, noWrapper: true, expected: bytes.NewBufferString("000020")},
 	}
 
 	for _, v := range cases {
-		result := v.piece.RawContent()
+		result := v.piece.RawContent(v.noWrapper)
+		c.Assert(result, check.DeepEquals, v.expected)
+	}
+}
+
+func (s *PieceTestSuite) TestTryResetContent(c *check.C) {
+	piece := &Piece{writerNum: 2, Content: pool.NewBufferString("")}
+	piece.TryResetContent()
+	c.Assert(piece.writerNum, check.Equals, int32(1))
+	c.Assert(piece.Content, check.NotNil)
+
+	piece.TryResetContent()
+	c.Assert(piece.writerNum, check.Equals, int32(0))
+	c.Assert(piece.Content, check.IsNil)
+}
+
+func (s *PieceTestSuite) TestWriteTo(c *check.C) {
+	var cases = []struct {
+		piece     *Piece
+		noWrapper bool
+		expected  *bytes.Buffer
+		hasErr    bool
+	}{
+		{piece: &Piece{Content: pool.NewBufferString("")}, noWrapper: false, expected: &bytes.Buffer{}, hasErr: true},
+		{piece: &Piece{Content: pool.NewBufferString("000010")}, noWrapper: false, expected: bytes.NewBufferString("1"), hasErr: false},
+		{piece: &Piece{Content: pool.NewBufferString("000020")}, noWrapper: true, expected: bytes.NewBufferString("000020"), hasErr: false},
+	}
+
+	for _, v := range cases {
+		result := &bytes.Buffer{}
+		_, err := v.piece.WriteTo(result, v.noWrapper)
+		c.Assert(err != nil, check.Equals, v.hasErr)
 		c.Assert(result, check.DeepEquals, v.expected)
 	}
 }

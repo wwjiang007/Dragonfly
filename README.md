@@ -1,6 +1,5 @@
 # Dragonfly
 
-[![Join the chat at https://gitter.im/alibaba/Dragonfly](https://badges.gitter.im/alibaba/Dragonfly.svg)](https://gitter.im/alibaba/Dragonfly?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 [![License](https://img.shields.io/badge/license-Apache%202-brightgreen.svg)](https://github.com/dragonflyoss/Dragonfly/blob/master/LICENSE)
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fdragonflyoss%2FDragonfly.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fdragonflyoss%2FDragonfly?ref=badge_shield)
 [![GoDoc](https://godoc.org/github.com/dragonflyoss/Dragonfly?status.svg)](https://godoc.org/github.com/dragonflyoss/Dragonfly)
@@ -35,7 +34,7 @@ Dragonfly is an open source intelligent P2P based image and file distribution sy
 - **Intelligent**: host level speed limit, intelligent flow control due to host detection;
 - **Secure**: block transmission encryption, HTTPS connection support.
 
-Dragonfly is now hosted by the [Cloud Native Computing Foundation](https://cncf.io) (CNCF) as a Sandbox Level Project. Originally it was born to solve all kinds of distribution at very large scales, such as application distribution, cache distribution, log distribution, image distribution, and so on.
+Dragonfly is now hosted by the [Cloud Native Computing Foundation](https://cncf.io) (CNCF) as an Incubating Level Project. Originally it was born to solve all kinds of distribution at very large scales, such as application distribution, cache distribution, log distribution, image distribution, and so on.
 
 Dragonfly has finished refactoring in Golang. Now versions > 0.4.0 are totally in Golang, while those < 0.4.0 are in Java. We encourage adopters to try Golang version first, since Java versions will be out of support in the next few releases.
 
@@ -79,11 +78,10 @@ For more details about roadmap, please refer to file [ROADMAP.md](ROADMAP.md).
 
 ## Community
 
-You are encouraged to communicate most things via GitHub issues or pull requests.
+You are encouraged to communicate most things via [GitHub issues](https://github.com/dragonflyoss/Dragonfly/issues/new/choose) or pull requests.
 
 Other active channels:
 
-- Gitter Chat: [dragonfly](https://gitter.im/alibaba/Dragonfly)
 - Twitter: [@dragonfly_oss](https://twitter.com/dragonfly_oss)
 - Dingtalk Group(钉钉群)
 

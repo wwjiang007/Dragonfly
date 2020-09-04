@@ -17,14 +17,15 @@
 package downloader
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"math/rand"
-	"os"
 	"strconv"
+	"strings"
 	"time"
 
+	apiTypes "github.com/dragonflyoss/Dragonfly/apis/types"
 	"github.com/dragonflyoss/Dragonfly/dfget/config"
 	"github.com/dragonflyoss/Dragonfly/dfget/core/api"
 	"github.com/dragonflyoss/Dragonfly/dfget/core/downloader"
@@ -32,11 +33,11 @@ import (
 	"github.com/dragonflyoss/Dragonfly/dfget/core/regist"
 	"github.com/dragonflyoss/Dragonfly/dfget/types"
 	"github.com/dragonflyoss/Dragonfly/pkg/constants"
-	"github.com/dragonflyoss/Dragonfly/pkg/fileutils"
 	"github.com/dragonflyoss/Dragonfly/pkg/httputils"
 	"github.com/dragonflyoss/Dragonfly/pkg/printer"
 	"github.com/dragonflyoss/Dragonfly/pkg/queue"
 	"github.com/dragonflyoss/Dragonfly/pkg/ratelimiter"
+
 	"github.com/sirupsen/logrus"
 )
 
@@ -69,6 +70,8 @@ type P2PDownloader struct {
 	targetFile string
 	// taskFileName is a string composed of `the last element of RealTarget path + "-" + sign`.
 	taskFileName string
+	// headers is the extra HTTP headers when downloading the task.
+	headers []string
 
 	pieceSizeHistory [2]int32
 	// queue maintains a queue of tasks that to be downloaded.
@@ -80,11 +83,18 @@ type P2PDownloader struct {
 	// And clientWriter will poll values from this queue constantly and write to disk.
 	clientQueue queue.Queue
 
+	// notifyQueue maintains a queue for notifying p2p downloader to pull next download tasks.
+	notifyQueue queue.Queue
+
 	// clientFilePath is the full path of the temp file.
 	clientFilePath string
 	// serviceFilePath is the full path of the temp service file which
 	// always ends with ".service".
 	serviceFilePath string
+
+	// streamMode indicates send piece data into a pipe
+	// this is useful for use dfget as a library
+	streamMode bool
 
 	// pieceSet range -> bool
 	// true: if the range is processed successfully
@@ -129,15 +139,20 @@ func (p2p *P2PDownloader) init() {
 	p2p.node = p2p.RegisterResult.Node
 	p2p.taskID = p2p.RegisterResult.TaskID
 	p2p.targetFile = p2p.cfg.RV.RealTarget
+	p2p.streamMode = p2p.cfg.RV.StreamMode
 	p2p.taskFileName = p2p.cfg.RV.TaskFileName
+	if p2p.RegisterResult.CDNSource == apiTypes.CdnSourceSource {
+		p2p.headers = p2p.cfg.Header
+	}
 
 	p2p.pieceSizeHistory[0], p2p.pieceSizeHistory[1] =
 		p2p.RegisterResult.PieceSize, p2p.RegisterResult.PieceSize
 
 	p2p.queue = queue.NewQueue(0)
-	p2p.queue.Put(NewPieceSimple(p2p.taskID, p2p.node, constants.TaskStatusStart))
+	p2p.queue.Put(NewPieceSimple(p2p.taskID, p2p.node, constants.TaskStatusStart, p2p.RegisterResult.CDNSource))
 
 	p2p.clientQueue = queue.NewQueue(p2p.cfg.ClientQueueSize)
+	p2p.notifyQueue = queue.NewQueue(p2p.cfg.ClientQueueSize)
 
 	p2p.clientFilePath = helper.GetTaskFile(p2p.taskFileName, p2p.cfg.RV.DataDir)
 	p2p.serviceFilePath = helper.GetServiceFile(p2p.taskFileName, p2p.cfg.RV.DataDir)
@@ -150,18 +165,42 @@ func (p2p *P2PDownloader) init() {
 
 // Run starts to download the file.
 func (p2p *P2PDownloader) Run(ctx context.Context) error {
+	if p2p.streamMode {
+		return fmt.Errorf("streamMode enabled, should be disable")
+	}
+	clientWriter := NewClientWriter(p2p.clientFilePath, p2p.serviceFilePath,
+		p2p.clientQueue, p2p.notifyQueue,
+		p2p.API, p2p.cfg, p2p.RegisterResult.CDNSource)
+	return p2p.run(ctx, clientWriter)
+}
+
+// RunStream starts to download the file, but return a io.Reader instead of writing a file to local disk.
+func (p2p *P2PDownloader) RunStream(ctx context.Context) (io.Reader, error) {
+	if !p2p.streamMode {
+		return nil, fmt.Errorf("streamMode disable, should be enabled")
+	}
+	clientStreamWriter := NewClientStreamWriter(p2p.clientQueue, p2p.notifyQueue, p2p.API, p2p.cfg)
+	go func() {
+		err := p2p.run(ctx, clientStreamWriter)
+		if err != nil {
+			logrus.Warnf("P2PDownloader run error: %s", err)
+		}
+	}()
+	return clientStreamWriter, nil
+}
+
+func (p2p *P2PDownloader) run(ctx context.Context, pieceWriter PieceWriter) error {
 	var (
 		lastItem *Piece
 		goNext   bool
 	)
 
-	// start ClientWriter
-	clientWriter, err := NewClientWriter(p2p.clientFilePath, p2p.serviceFilePath, p2p.clientQueue, p2p.API, p2p.cfg)
-	if err != nil {
+	// start PieceWriter
+	if err := pieceWriter.PreRun(ctx); err != nil {
 		return err
 	}
 	go func() {
-		clientWriter.Run(ctx)
+		pieceWriter.Run(ctx)
 	}()
 
 	for {
@@ -172,7 +211,7 @@ func (p2p *P2PDownloader) Run(ctx context.Context) error {
 		logrus.Infof("downloading piece:%v", lastItem)
 
 		curItem := *lastItem
-		curItem.Content = &bytes.Buffer{}
+		curItem.Content = nil
 		lastItem = nil
 
 		response, err := p2p.pullPieceTask(&curItem)
@@ -186,7 +225,10 @@ func (p2p *P2PDownloader) Run(ctx context.Context) error {
 			if code == constants.CodePeerContinue {
 				p2p.processPiece(response, &curItem)
 			} else if code == constants.CodePeerFinish {
-				p2p.finishTask(response, clientWriter)
+				if p2p.cfg.Md5 == "" {
+					p2p.cfg.Md5 = response.FinishData().Md5
+				}
+				p2p.finishTask(ctx, pieceWriter)
 				return nil
 			} else {
 				logrus.Warnf("request piece result:%v", response)
@@ -246,14 +288,10 @@ func (p2p *P2PDownloader) pullPieceTask(item *Piece) (
 			break
 		}
 
-		sleepTime := time.Duration(rand.Intn(p2p.maxTimeout-p2p.minTimeout)+p2p.minTimeout) * time.Millisecond
-		logrus.Infof("pull piece task(%+v) result:%s and sleep %.3fs", item, res, sleepTime.Seconds())
-		time.Sleep(sleepTime)
-
-		// gradually increase the sleep time, up to [800-1600]
-		if p2p.minTimeout < 800 {
-			p2p.minTimeout *= 2
-			p2p.maxTimeout *= 2
+		actual, expected := p2p.sleepInterval()
+		if expected > actual || logrus.IsLevelEnabled(logrus.DebugLevel) {
+			logrus.Infof("pull piece task(%+v) result:%s and sleep actual:%.3fs expected:%.3fs",
+				item, res, actual.Seconds(), expected.Seconds())
 		}
 	}
 
@@ -278,6 +316,23 @@ func (p2p *P2PDownloader) pullPieceTask(item *Piece) (
 	item.TaskID = registerRes.TaskID
 	printer.Println("migrated to node:" + item.SuperNode)
 	return p2p.pullPieceTask(item)
+}
+
+// sleepInterval sleep for a while to wait for next pulling piece task until
+// receiving a notification which indicating that all the previous works have
+// been completed.
+func (p2p *P2PDownloader) sleepInterval() (actual, expected time.Duration) {
+	expected = time.Duration(rand.Intn(p2p.maxTimeout-p2p.minTimeout)+p2p.minTimeout) * time.Millisecond
+	start := time.Now()
+	p2p.notifyQueue.PollTimeout(expected)
+	actual = time.Now().Sub(start)
+
+	// gradually increase the sleep time, up to [800-1600]
+	if p2p.minTimeout < 800 {
+		p2p.minTimeout *= 2
+		p2p.maxTimeout *= 2
+	}
+	return actual, expected
 }
 
 // getPullRate gets download rate limit dynamically.
@@ -328,6 +383,9 @@ func (p2p *P2PDownloader) startTask(data *types.PullPieceTaskResponseContinueDat
 		clientQueue: p2p.clientQueue,
 		rateLimiter: p2p.rateLimiter,
 		downloadAPI: api.NewDownloadAPI(),
+		headers:     p2p.headers,
+		cdnSource:   p2p.RegisterResult.CDNSource,
+		fileLength:  p2p.RegisterResult.FileLength,
 	}
 	if err := powerClient.Run(); err != nil && powerClient.ClientError() != nil {
 		p2p.API.ReportClientError(p2p.node, powerClient.ClientError())
@@ -356,7 +414,7 @@ func (p2p *P2PDownloader) getItem(latestItem *Piece) (bool, *Piece) {
 			}
 			if !v && (item.Result == constants.ResultSemiSuc ||
 				item.Result == constants.ResultSuc) {
-				p2p.total += int64(item.Content.Len())
+				p2p.total += item.ContentLength()
 				p2p.pieceSet[item.Range] = true
 			} else if !v {
 				delete(p2p.pieceSet, item.Range)
@@ -407,7 +465,8 @@ func (p2p *P2PDownloader) processPiece(response *types.PullPieceTaskResponse,
 				pieceTask.Cid,
 				pieceRange,
 				constants.ResultSemiSuc,
-				constants.TaskStatusRunning))
+				constants.TaskStatusRunning,
+				p2p.RegisterResult.CDNSource))
 			continue
 		}
 		if !ok {
@@ -425,12 +484,12 @@ func (p2p *P2PDownloader) processPiece(response *types.PullPieceTaskResponse,
 	}
 }
 
-func (p2p *P2PDownloader) finishTask(response *types.PullPieceTaskResponse, clientWriter *ClientWriter) {
+func (p2p *P2PDownloader) finishTask(ctx context.Context, pieceWriter PieceWriter) {
 	// wait client writer finished
 	logrus.Infof("remaining piece to be written count:%d", p2p.clientQueue.Len())
 	p2p.clientQueue.Put(last)
 	waitStart := time.Now()
-	clientWriter.Wait()
+	pieceWriter.Wait()
 	logrus.Infof("wait client writer finish cost:%.3f,main qu size:%d,client qu size:%d",
 		time.Since(waitStart).Seconds(), p2p.queue.Len(), p2p.clientQueue.Len())
 
@@ -438,26 +497,11 @@ func (p2p *P2PDownloader) finishTask(response *types.PullPieceTaskResponse, clie
 		return
 	}
 
-	// get the temp path where the downloaded file exists.
-	var src string
-	if clientWriter.acrossWrite || !helper.IsP2P(p2p.cfg.Pattern) {
-		src = p2p.cfg.RV.TempTarget
-	} else {
-		if _, err := os.Stat(p2p.clientFilePath); err != nil {
-			logrus.Warnf("client file path:%s not found", p2p.clientFilePath)
-			if e := fileutils.Link(p2p.serviceFilePath, p2p.clientFilePath); e != nil {
-				logrus.Warnln("hard link failed, instead of use copy")
-				fileutils.CopyFile(p2p.serviceFilePath, p2p.clientFilePath)
-			}
-		}
-		src = p2p.clientFilePath
+	err := pieceWriter.PostRun(ctx)
+	if err != nil {
+		logrus.Warnf("post run error: %s", err)
 	}
 
-	// move file to the target file path.
-	if err := downloader.MoveFile(src, p2p.targetFile, p2p.cfg.Md5); err != nil {
-		return
-	}
-	logrus.Infof("download successfully from dragonfly")
 }
 
 func (p2p *P2PDownloader) refresh(item *Piece) {
@@ -479,4 +523,25 @@ func (p2p *P2PDownloader) refresh(item *Piece) {
 		p2p.node = item.SuperNode
 		p2p.taskID = item.TaskID
 	}
+}
+
+// wipeOutOfRange will update the end index of range when it's greater than the maxLength.
+func wipeOutOfRange(pieceRange string, maxLength int64) string {
+	if maxLength < 0 {
+		return pieceRange
+	}
+	indexes := strings.Split(pieceRange, config.RangeSeparator)
+	if len(indexes) != 2 {
+		return pieceRange
+	}
+
+	endIndex, err := strconv.Atoi(indexes[1])
+	if err != nil {
+		return pieceRange
+	}
+
+	if int64(endIndex) < maxLength {
+		return pieceRange
+	}
+	return fmt.Sprintf("%s%s%s", indexes[0], config.RangeSeparator, strconv.FormatInt(maxLength-1, 10))
 }

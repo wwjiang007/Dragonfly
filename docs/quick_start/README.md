@@ -6,19 +6,28 @@ If you are using Dragonfly in your **production environment** to handle producti
 
 ## Prerequisites
 
-All steps in this document are done on the same machine using the docker container, so make sure the docker container engine is installed and started on your machine. You can also refer to the documentation: [multi-machine deployment](../user_guide/multi_machines_deployment.md) to experience Dragonfly.
+All steps in this document is doing on the same machine using the docker container, so make sure the docker container engine installed and started on your machine. You can also refer to the documentation: [multi-machine deployment](../user_guide/multi_machines_deployment.md) to experience Dragonfly.
 
 ## Step 1: Deploy Dragonfly Server (SuperNode)
 
 ```bash
-docker run -d --name supernode --restart=always -p 8001:8001 -p 8002:8002 -v /home/admin/supernode:/home/admin/supernode dragonflyoss/supernode:0.4.3
+docker run -d --name supernode \
+    --restart=always \
+    -p 8001:8001 \
+    -p 8002:8002 \
+    -v /home/admin/supernode:/home/admin/supernode \
+    dragonflyoss/supernode:1.0.2
 ```
 
 ## Step 2: Deploy Dragonfly Client (dfclient)
 
 ```bash
 SUPERNODE_IP=`docker inspect supernode -f '{{.NetworkSettings.Networks.bridge.IPAddress}}'`
-docker run -d --name dfclient --restart=always -p 65001:65001 -v $HOME/.small-dragonfly:/root/.small-dragonfly dragonflyoss/dfclient:0.4.3 --registry https://index.docker.io --node $SUPERNODE_IP
+docker run -d --name dfclient \
+    --restart=always \
+    -p 65001:65001 \
+    -v $HOME/.small-dragonfly:/root/.small-dragonfly \
+    dragonflyoss/dfclient:1.0.2 --registry https://index.docker.io --node $SUPERNODE_IP
 ```
 
 **NOTE**:
@@ -70,13 +79,15 @@ If the output of command above has content like
 2019-03-29 15:49:53.913 INFO sign:96027-1553845785.119 : downloading piece:{"taskID":"00a0503ea12457638ebbef5d0bfae51f9e8e0a0a349312c211f26f53beb93cdc","superNode":"127.0.0.1","dstCid":"127.0.0.1-95953-1553845720.488","range":"67108864-71303167","result":503,"status":701,"pieceSize":4194304,"pieceNum":16}
 ```
 
-then Dragonfly is proved to work successfully.
+then Dragonfly works successfully.
 
 ## SEE ALSO
 
 - [multi machines deployment](../user_guide/multi_machines_deployment.md) - experience Dragonfly on multiple machines
 - [install server](../user_guide/install_server.md) - how to install the Dragonfly server
 - [install client](../user_guide/install_client.md) - how to install the Dragonfly dfclient
-- [docker proxy](../user_guide/docker_proxy.md) - make Dragonfly as HTTP proxy for docker daemon
 - [proxy](../user_guide/proxy.md) - config proxy
 - [download files](../user_guide/download_files.md) - download files with Dragonfly
+- Container Runtimes
+  - [docker proxy](../user_guide/container_runtimes/docker_proxy.md) - make Dragonfly as HTTP proxy for docker daemon
+  - [crio mirror](../user_guide/container_runtimes/crio_mirror.md) - make Dragonfly as Registry Mirror for CRIO daemon

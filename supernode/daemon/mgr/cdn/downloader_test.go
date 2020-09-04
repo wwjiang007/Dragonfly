@@ -22,6 +22,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/dragonflyoss/Dragonfly/pkg/errortypes"
@@ -46,7 +47,7 @@ func init() {
 }
 
 func (s *CDNDownloadTestSuite) TestDownload(c *check.C) {
-	cm, _ := NewManager(config.NewConfig(), nil, nil, httpclient.NewOriginClient(), prometheus.DefaultRegisterer)
+	cm, _ := newManager(config.NewConfig(), nil, nil, httpclient.NewOriginClient(), prometheus.DefaultRegisterer)
 	bytes := []byte("hello world")
 	bytesLength := int64(len(bytes))
 
@@ -104,7 +105,9 @@ func (s *CDNDownloadTestSuite) TestDownload(c *check.C) {
 	}
 
 	for _, v := range cases {
+		headers := cloneMap(v.headers)
 		resp, err := cm.download(context.TODO(), "", ts.URL, v.headers, v.startPieceNum, v.httpFileLength, v.pieceContSize)
+		c.Check(headers, check.DeepEquals, v.headers)
 		c.Check(v.errCheck(err), check.Equals, true)
 
 		c.Check(resp.StatusCode, check.Equals, v.exceptedStatusCode)
@@ -113,4 +116,63 @@ func (s *CDNDownloadTestSuite) TestDownload(c *check.C) {
 		resp.Body.Close()
 		c.Check(string(result), check.Equals, string(v.exceptedBody))
 	}
+}
+
+func Test_checkStatusCode(t *testing.T) {
+	type args struct {
+		statusCode       []int
+		targetStatusCode int
+	}
+	tests := []struct {
+		name       string
+		args       args
+		statusCode int
+		want       bool
+	}{
+		{
+			name: "200",
+			args: args{
+				statusCode:       []int{http.StatusOK},
+				targetStatusCode: 200,
+			},
+			want: true,
+		},
+		{
+			name: "200|206",
+			args: args{
+				statusCode:       []int{http.StatusOK, http.StatusPartialContent},
+				targetStatusCode: 206,
+			},
+			want: true,
+		},
+		{
+			name: "204",
+			args: args{
+				statusCode:       []int{http.StatusOK, http.StatusPartialContent},
+				targetStatusCode: 204,
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := checkStatusCode(tt.args.statusCode)(tt.args.targetStatusCode); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("checkStatusCode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// ----------------------------------------------------------------------------
+// helper
+
+func cloneMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	target := make(map[string]string)
+	for k, v := range src {
+		target[k] = v
+	}
+	return target
 }

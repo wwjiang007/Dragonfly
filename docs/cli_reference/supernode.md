@@ -16,6 +16,7 @@ supernode [flags]
 
 ```
       --advertise-ip string             the supernode ip is the ip we advertise to other peers in the p2p-network
+      --cdn-pattern string              cdn pattern, must be in ["local", "source"]. Default: local (default "local")
       --config string                   the path of supernode's configuration file (default "/etc/dragonfly/supernode.yml")
   -D, --debug                           switch daemon log level to DEBUG mode
       --down-limit int                  download limit for supernode to serve download tasks (default 4)
@@ -37,6 +38,7 @@ supernode [flags]
 
 ### SEE ALSO
 
+* [supernode config](supernode_config.md)	 - Manage the configurations of supernode
 * [supernode gen-doc](supernode_gen-doc.md)	 - Generate Document for supernode command line tool in MarkDown format
 * [supernode version](supernode_version.md)	 - Show the current version of supernode
 

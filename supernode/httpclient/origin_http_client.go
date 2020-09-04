@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/dragonflyoss/Dragonfly/pkg/errortypes"
+	"github.com/dragonflyoss/Dragonfly/pkg/httputils"
 	"github.com/dragonflyoss/Dragonfly/pkg/netutils"
 	"github.com/dragonflyoss/Dragonfly/pkg/stringutils"
 
@@ -35,24 +36,43 @@ import (
 	"github.com/pkg/errors"
 )
 
+type StatusCodeChecker func(int) bool
+
 // OriginHTTPClient supply apis that interact with the source.
 type OriginHTTPClient interface {
 	RegisterTLSConfig(rawURL string, insecure bool, caBlock []strfmt.Base64)
 	GetContentLength(url string, headers map[string]string) (int64, int, error)
 	IsSupportRange(url string, headers map[string]string) (bool, error)
 	IsExpired(url string, headers map[string]string, lastModified int64, eTag string) (bool, error)
-	Download(url string, headers map[string]string, checkCode int) (*http.Response, error)
+	Download(url string, headers map[string]string, checkCode StatusCodeChecker) (*http.Response, error)
 }
 
 // OriginClient is an implementation of the interface of OriginHTTPClient.
 type OriginClient struct {
-	clientMap *sync.Map
+	clientMap         *sync.Map
+	defaultHTTPClient *http.Client
 }
 
 // NewOriginClient returns a new OriginClient.
 func NewOriginClient() OriginHTTPClient {
+	defaultTransport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   3 * time.Second,
+			KeepAlive: 30 * time.Second,
+			DualStack: true,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	httputils.RegisterProtocolOnTransport(defaultTransport)
 	return &OriginClient{
 		clientMap: &sync.Map{},
+		defaultHTTPClient: &http.Client{
+			Transport: defaultTransport,
+		},
 	}
 }
 
@@ -77,27 +97,31 @@ func (client *OriginClient) RegisterTLSConfig(rawURL string, insecure bool, caBl
 		tlsConfig.RootCAs = roots
 	}
 
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   3 * time.Second,
+			KeepAlive: 30 * time.Second,
+			DualStack: true,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig:       tlsConfig,
+	}
+
+	httputils.RegisterProtocolOnTransport(transport)
+
 	client.clientMap.Store(url.Host, &http.Client{
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   3 * time.Second,
-				KeepAlive: 30 * time.Second,
-				DualStack: true,
-			}).DialContext,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			TLSClientConfig:       tlsConfig,
-		},
+		Transport: transport,
 	})
 }
 
 // GetContentLength sends a head request to get file length.
 func (client *OriginClient) GetContentLength(url string, headers map[string]string) (int64, int, error) {
 	// send request
-	resp, err := client.HTTPWithHeaders("GET", url, headers, 4*time.Second)
+	resp, err := client.HTTPWithHeaders(http.MethodGet, url, headers, 4*time.Second)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -108,18 +132,16 @@ func (client *OriginClient) GetContentLength(url string, headers map[string]stri
 
 // IsSupportRange checks if the source url support partial requests.
 func (client *OriginClient) IsSupportRange(url string, headers map[string]string) (bool, error) {
-	// set headers
-	if headers == nil {
-		headers = make(map[string]string)
-	}
-	headers["Range"] = "bytes=0-0"
+	// set headers: headers is a reference to map, should not change it
+	copied := CopyHeader(nil, headers)
+	copied["Range"] = "bytes=0-0"
 
 	// send request
-	resp, err := client.HTTPWithHeaders("GET", url, headers, 4*time.Second)
+	resp, err := client.HTTPWithHeaders(http.MethodGet, url, copied, 4*time.Second)
 	if err != nil {
 		return false, err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode == http.StatusPartialContent {
 		return true, nil
@@ -133,20 +155,18 @@ func (client *OriginClient) IsExpired(url string, headers map[string]string, las
 		return true, nil
 	}
 
-	// set headers
-	if headers == nil {
-		headers = make(map[string]string)
-	}
+	// set headers: headers is a reference to map, should not change it
+	copied := CopyHeader(nil, headers)
 	if lastModified > 0 {
 		lastModifiedStr, _ := netutils.ConvertTimeIntToString(lastModified)
-		headers["If-Modified-Since"] = lastModifiedStr
+		copied["If-Modified-Since"] = lastModifiedStr
 	}
 	if !stringutils.IsEmptyStr(eTag) {
-		headers["If-None-Match"] = eTag
+		copied["If-None-Match"] = eTag
 	}
 
 	// send request
-	resp, err := client.HTTPWithHeaders("GET", url, headers, 4*time.Second)
+	resp, err := client.HTTPWithHeaders(http.MethodGet, url, copied, 4*time.Second)
 	if err != nil {
 		return false, err
 	}
@@ -156,14 +176,14 @@ func (client *OriginClient) IsExpired(url string, headers map[string]string, las
 }
 
 // Download downloads the file from the original address
-func (client *OriginClient) Download(url string, headers map[string]string, checkCode int) (*http.Response, error) {
+func (client *OriginClient) Download(url string, headers map[string]string, checkCode StatusCodeChecker) (*http.Response, error) {
 	// TODO: add timeout
-	resp, err := client.HTTPWithHeaders("GET", url, headers, 0)
+	resp, err := client.HTTPWithHeaders(http.MethodGet, url, headers, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	if resp.StatusCode == checkCode {
+	if checkCode(resp.StatusCode) {
 		return resp, nil
 	}
 	return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -188,7 +208,8 @@ func (client *OriginClient) HTTPWithHeaders(method, url string, headers map[stri
 
 	httpClientObject, existed := client.clientMap.Load(req.Host)
 	if !existed {
-		httpClientObject = http.DefaultClient
+		// use client.defaultHTTPClient to support custom protocols
+		httpClientObject = client.defaultHTTPClient
 	}
 
 	httpClient, ok := httpClientObject.(*http.Client)
@@ -196,4 +217,15 @@ func (client *OriginClient) HTTPWithHeaders(method, url string, headers map[stri
 		return nil, errors.Wrapf(errortypes.ErrInvalidValue, "http client type check error: %T", httpClientObject)
 	}
 	return httpClient.Do(req)
+}
+
+// CopyHeader copies the src to dst and return a non-nil dst map.
+func CopyHeader(dst, src map[string]string) map[string]string {
+	if dst == nil {
+		dst = make(map[string]string)
+	}
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }

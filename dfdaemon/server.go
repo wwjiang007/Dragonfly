@@ -25,6 +25,8 @@ import (
 	"github.com/dragonflyoss/Dragonfly/dfdaemon/config"
 	"github.com/dragonflyoss/Dragonfly/dfdaemon/handler"
 	"github.com/dragonflyoss/Dragonfly/dfdaemon/proxy"
+	dfgetConfig "github.com/dragonflyoss/Dragonfly/dfget/config"
+	"github.com/dragonflyoss/Dragonfly/dfget/core/uploader"
 	"github.com/dragonflyoss/Dragonfly/version"
 
 	"github.com/pkg/errors"
@@ -115,16 +117,32 @@ func NewFromConfig(cfg config.Properties) (*Server, error) {
 	return New(opts...)
 }
 
+func LaunchPeerServer(cfg config.Properties) error {
+	peerServerConfig := dfgetConfig.NewConfig()
+	peerServerConfig.RV.LocalIP = cfg.LocalIP
+	peerServerConfig.RV.PeerPort = cfg.PeerPort
+	peerServerConfig.RV.ServerAliveTime = 0
+	port, err := uploader.LaunchPeerServer(peerServerConfig)
+	if err != nil {
+		return err
+	}
+	peerServerConfig.RV.PeerPort = port
+	return nil
+}
+
 // Start runs dfdaemon's http server.
 func (s *Server) Start() error {
+	var err error
 	_ = proxy.WithDirectHandler(handler.New())(s.proxy)
 	s.server.Handler = s.proxy
 	if s.server.TLSConfig != nil {
 		logrus.Infof("start dfdaemon https server on %s", s.server.Addr)
+		err = s.server.ListenAndServeTLS("", "")
 	} else {
 		logrus.Infof("start dfdaemon http server on %s", s.server.Addr)
+		err = s.server.ListenAndServe()
 	}
-	return s.server.ListenAndServe()
+	return err
 }
 
 // Stop gracefully stops the dfdaemon http server.

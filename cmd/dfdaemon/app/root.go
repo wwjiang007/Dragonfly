@@ -61,7 +61,7 @@ var rootCmd = &cobra.Command{
 			return errors.Wrap(err, "get config from viper")
 		}
 
-		if err := initDfdaemon(*cfg); err != nil {
+		if err := initDfdaemon(cfg); err != nil {
 			return errors.Wrap(err, "init dfdaemon")
 		}
 
@@ -71,6 +71,10 @@ var rootCmd = &cobra.Command{
 		s, err := dfdaemon.NewFromConfig(*cfg)
 		if err != nil {
 			return errors.Wrap(err, "create dfdaemon from config")
+		}
+		// if stream mode, launch peer server in dfdaemon progress
+		if cfg.StreamMode {
+			go dfdaemon.LaunchPeerServer(*cfg)
 		}
 		return s.Start()
 	},
@@ -93,6 +97,8 @@ func init() {
 	// http server config
 	rf.String("hostIp", "127.0.0.1", "dfdaemon host ip, default: 127.0.0.1")
 	rf.Uint("port", 65001, "dfdaemon will listen the port")
+	rf.Uint("peerPort", 0, "peerserver will listen the port")
+	rf.Bool("streamMode", false, "dfdaemon will run in stream mode")
 	rf.String("certpem", "", "cert.pem file path")
 	rf.String("keypem", "", "key.pem file path")
 
@@ -106,7 +112,12 @@ func init() {
 	rf.StringSlice("node", nil, "specify the addresses(host:port) of supernodes that will be passed to dfget.")
 
 	exitOnError(bindRootFlags(viper.GetViper()), "bind root command flags")
+
+	// add sub commands
+	rootCmd.AddCommand(NewGenCACommand())
 	rootCmd.AddCommand(cmd.NewGenDocCommand("dfdaemon"))
+	rootCmd.AddCommand(cmd.NewVersionCommand("dfdaemon"))
+	rootCmd.AddCommand(cmd.NewConfigCommand("dfdaemon", getDefaultConfig))
 }
 
 // bindRootFlags binds flags on rootCmd to the given viper instance.
@@ -157,6 +168,11 @@ func Execute() {
 			os.Exit(1)
 		}
 	}
+}
+
+// getDefaultConfig returns the default configuration of dfdaemon
+func getDefaultConfig() (interface{}, error) {
+	return getConfigFromViper(rootCmd, viper.GetViper())
 }
 
 // getConfigFromViper returns dfdaemon config from the given viper instance

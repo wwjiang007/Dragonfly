@@ -219,7 +219,7 @@ paths:
         500:
           $ref: "#/responses/500ErrorResponse"
 
-  /peers:
+  /api/v1/peers:
     post:
       summary: "register dfget in Supernode as a peer node"
       description: "dfget sends request to register in Supernode as a peer node"
@@ -280,7 +280,7 @@ paths:
         500:
           $ref: "#/responses/500ErrorResponse"
 
-  /peers/{id}:
+  /api/v1/peers/{id}:
     get:
       summary: "get a peer in supernode"
       description: "return low-level information of a peer in supernode."
@@ -324,7 +324,7 @@ paths:
         500:
           $ref: "#/responses/500ErrorResponse"
 
-  /tasks:
+  /api/v1/tasks:
     post:
       summary: "create a task"
       description: |
@@ -347,7 +347,7 @@ paths:
         500:
           $ref: "#/responses/500ErrorResponse"
 
-  /tasks/{id}:
+  /api/v1/tasks/{id}:
     get:
       summary: "get a task"
       description: |
@@ -431,7 +431,7 @@ paths:
         500:
           $ref: "#/responses/500ErrorResponse"
 
-  /tasks/{id}/pieces:
+  /api/v1/tasks/{id}/pieces:
     get:
       summary: "Get pieces in task"
       description: |
@@ -481,7 +481,7 @@ paths:
         500:
           $ref: "#/responses/500ErrorResponse"
 
-  /tasks/{id}/pieces/{pieceRange}:
+  /api/v1/tasks/{id}/pieces/{pieceRange}:
     put:
       summary: "Update a piece"
       description: |
@@ -520,7 +520,7 @@ paths:
         500:
           $ref: "#/responses/500ErrorResponse"
 
-  /tasks/{id}/pieces/{pieceRange}/error:
+  /api/v1/tasks/{id}/pieces/{pieceRange}/error:
     post:
       summary: "report a piece error"
       description: |
@@ -557,7 +557,7 @@ paths:
         500:
           $ref: "#/responses/500ErrorResponse"
 
-  /preheats:
+  /api/v1/preheats:
     post:
       summary: "Create a Preheat Task"
       description: |
@@ -578,6 +578,10 @@ paths:
             $ref: "#/definitions/PreheatCreateResponse"
         400:
           description: "bad parameter"
+          schema:
+            $ref: '#/definitions/Error'
+        409:
+          description: "preheat task already exists"
           schema:
             $ref: '#/definitions/Error'
         500:
@@ -603,7 +607,7 @@ paths:
         500:
           $ref: "#/responses/500ErrorResponse"
 
-  /preheats/{id}:
+  /api/v1/preheats/{id}:
     get:
       summary: "Get a preheat task"
       description: |
@@ -621,6 +625,28 @@ paths:
           description: "no error"
           schema:
             $ref: "#/definitions/PreheatInfo"
+        404:
+          description: "no such preheat task"
+          schema:
+            $ref: "#/responses/404ErrorResponse"
+        500:
+          $ref: "#/responses/500ErrorResponse"
+
+    delete:
+      summary: "Delete a preheat task"
+      description: |
+        delete a preheat task
+      produces:
+        - "application/json"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: "ID of preheat task"
+          type: string
+      responses:
+        200:
+          description: "no error"
         404:
           description: "no such preheat task"
           schema:
@@ -647,6 +673,47 @@ paths:
             $ref: "#/definitions/ResultInfo"
         500:
           $ref: "#/responses/500ErrorResponse"
+
+  /peer/heartbeat:
+    post:
+      summary: "report the heart beat to super node."
+      description: |
+        This endpoint is mainly for reporting the heart beat to supernode.
+        And supernode could know if peer is alive in strem mode.
+      parameters:
+        - name: "body"
+          in: "body"
+          description: "request body which contains base info of peer"
+          schema:
+            $ref: "#/definitions/HeartBeatRequest"
+      responses:
+        200:
+          description: "no error"
+          schema:
+            $ref: "#/definitions/HeartBeatResponse"
+        500:
+          $ref: "#/responses/500ErrorResponse"
+
+  /peer/network:
+    post:
+      summary: "peer request the p2p network info from supernode."
+      description: |
+        In the new mode which dfdaemon will provide the seed file so that other peers
+        could download. This endpoint is mainly for fetching the p2p network info.
+      parameters:
+        - name: "body"
+          in: "body"
+          description: "request body which filter urls."
+          schema:
+            $ref: "#/definitions/NetworkInfoFetchRequest"
+      responses:
+        200:
+          description: "no error"
+          schema:
+            $ref: "#/definitions/NetworkInfoFetchResponse"
+        500:
+          $ref: "#/responses/500ErrorResponse"
+
 
 definitions:
   Error:
@@ -793,6 +860,22 @@ definitions:
           this field to supernode and supernode can do some checking and filtering via
           black/white list mechanism to guarantee security, or some other purposes like debugging.
         minLength: 1
+      taskId:
+        type: "string"
+        description: |
+          Dfdaemon or dfget could specific the taskID which will represents the key of this resource
+          in supernode.
+      fileLength:
+        type: "integer"
+        description: |
+          This attribute represents the length of resource, dfdaemon or dfget catches and calculates
+          this parameter from the headers of request URL. If fileLength is vaild, the supernode need
+          not get the length of resource by accessing the rawURL.
+        format: "int64"
+      asSeed:
+        type: "boolean"
+        description: |
+          This attribute represents the node as a seed node for the taskURL.
 
   PeerCreateRequest:
     type: "object"
@@ -945,6 +1028,18 @@ definitions:
           downloads, if there is already a task a.b.com/fileA.
         items:
           type: "string"
+      taskId:
+        type: "string"
+        description: |
+          This attribute represents the digest of resource, dfdaemon or dfget catches this parameter
+          from the headers of request URL. The digest will be considered as the taskID if not null.
+      fileLength:
+        type: "integer"
+        description: |
+          This attribute represents the length of resource, dfdaemon or dfget catches and calculates
+          this parameter from the headers of request URL. If fileLength is vaild, the supernode need
+          not get the length of resource by accessing the rawURL.
+        format: "int64"
       peerID:
         type: "string"
         description: |
@@ -973,6 +1068,13 @@ definitions:
           1. If file's total size is less than 200MB, then the piece size is 4MB by default.
           2. Otherwise, it equals to the smaller value between totalSize/100MB + 2 MB and 15MB.
         format: int32
+      cdnSource:
+        $ref: "#/definitions/CdnSource"
+
+  CdnSource:
+    type: string
+    description: ""
+    enum: ["supernode", "source"]
 
   TaskInfo:
     type: "object"
@@ -1048,6 +1150,10 @@ definitions:
           from source server as user's wish.
         additionalProperties:
           type: "string"
+      asSeed:
+        type: "boolean"
+        description: |
+          This attribute represents the node as a seed node for the taskURL.
 
   TaskUpdateRequest:
     type: "object"
@@ -1145,7 +1251,7 @@ definitions:
       taskId:
         type: "string"
         description: |
-            the taskID of the piece.
+          the taskID of the piece.
       srcCid:
         type: "string"
         description: |
@@ -1190,7 +1296,7 @@ definitions:
         description: |
           ID of preheat task.
       status:
-        type: "string"
+        $ref: "#/definitions/PreheatStatus"
         description: |
           The status of preheat task.
             WAITING -----> RUNNING -----> SUCCESS
@@ -1198,7 +1304,6 @@ definitions:
           The initial status of a created preheat task is WAITING.
           It's finished when a preheat task's status is FAILED or SUCCESS.
           A finished preheat task's information can be queried within 24 hours.
-        enum: ["WAITING", "RUNNING", "FAILED", "SUCCESS"]
       startTime:
         type: "string"
         format: "date-time"
@@ -1208,17 +1313,33 @@ definitions:
         format: "date-time"
         description: "the preheat task finish time"
 
+  PreheatStatus:
+    type: string
+    description: |
+      The status of preheat task.
+        WAITING -----> RUNNING -----> SUCCESS
+                                 |--> FAILED
+      The initial status of a created preheat task is WAITING.
+      It's finished when a preheat task's status is FAILED or SUCCESS.
+      A finished preheat task's information can be queried within 24 hours.
+    enum: ["WAITING", "RUNNING", "FAILED", "SUCCESS"]
+
   PreheatCreateRequest:
     type: "object"
     description: |
       Request option of creating a preheat task in supernode.
+    required:
+      - type
+      - url
     properties:
       type:
         type: "string"
+        enum: ["image", "file"]
         description: |
           this must be image or file
       url:
         type: "string"
+        minLength: 3
         description: "the image or file location"
       filter:
         type: "string"
@@ -1276,7 +1397,7 @@ definitions:
       status:
         type: "string"
         description: |
-            The status of Dfget download process.
+          The status of Dfget download process.
         enum: ["WAITING", "RUNNING", "FAILED", "SUCCESS"]
       peerID:
         type: "string"
@@ -1354,6 +1475,103 @@ definitions:
         type: "integer"
         format: "int64"
         description: "The length of the file dfget requests to download in bytes."
+
+  NetworkInfoFetchRequest:
+    type: "object"
+    description: "The request is to fetch p2p network info from supernode."
+    properties:
+      urls:
+        type: "array"
+        description: |
+          The urls is to filter the peer node, the url should be match with taskURL in TaskInfo.
+        items:
+          type: "string"
+
+  TaskFetchInfo:
+    type: "object"
+    description: "It shows the task info and pieces info."
+    properties:
+      task:
+        $ref: "#/definitions/TaskInfo"
+      pieces:
+        type: "array"
+        description: "The pieces which should belong to the peer node"
+        items:
+          $ref: "#/definitions/PieceInfo"
+
+  Node:
+    type: "object"
+    description: "The object shows the basic info of node and the task belongs to the node."
+    properties:
+      basic:
+        $ref: "#/definitions/PeerInfo"
+        description: "Basic node info"
+      extra:
+        type: "object"
+        additionalProperties:
+          type: "string"
+      load:
+        type: "integer"
+        description: "The load of node, which as the schedule weight in peer schedule."
+      tasks:
+        type: "array"
+        items:
+          $ref: "#/definitions/TaskFetchInfo"
+
+  NetworkInfoFetchResponse:
+    type: "object"
+    description: "The response is from supernode to peer which is requested to fetch p2p network info."
+    properties:
+      nodes:
+        type: "array"
+        items:
+          $ref: "#/definitions/Node"
+
+  HeartBeatRequest:
+    type: "object"
+    description: "The request is to report peer to supernode to keep alive."
+    properties:
+      IP:
+        type: "string"
+        description: "IP address which peer client carries"
+        format: "ipv4"
+      port:
+        type: "integer"
+        description: |
+          when registering, dfget will setup one uploader process.
+          This one acts as a server for peer pulling tasks.
+          This port is which this server listens on.
+        format: "int32"
+        minimum: 15000
+        maximum: 65000
+      cID:
+        type: "string"
+        description: |
+          CID means the client ID. It maps to the specific dfget process.
+          When user wishes to download an image/file, user would start a dfget process to do this.
+          This dfget is treated a client and carries a client ID.
+          Thus, multiple dfget processes on the same peer have different CIDs.
+
+  HeartBeatResponse:
+    type: "object"
+    description: ""
+    properties:
+      version:
+        type: "string"
+        description: |
+          The version of supernode. If supernode restarts, version should be different, so dfdaemon could know
+          the restart of supernode.
+      needRegister:
+        type: "boolean"
+        description: |
+          If peer do not register in supernode, set needRegister to be true, else set to be false.
+      seedTaskIDs:
+        type: "array"
+        description: |
+          The array of seed taskID which now are selected as seed for the peer. If peer have other seed file which
+          is not included in the array, these seed file should be weed out.
+        items:
+          type: "string"
 
   ErrorResponse:
     type: "object"

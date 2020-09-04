@@ -17,21 +17,39 @@
 package downloader
 
 import (
-	"bufio"
 	"context"
-	"io"
+	"math/rand"
 	"os"
 	"time"
 
+	apiTypes "github.com/dragonflyoss/Dragonfly/apis/types"
 	"github.com/dragonflyoss/Dragonfly/dfget/config"
 	"github.com/dragonflyoss/Dragonfly/dfget/core/api"
+	"github.com/dragonflyoss/Dragonfly/dfget/core/downloader"
 	"github.com/dragonflyoss/Dragonfly/dfget/core/helper"
 	"github.com/dragonflyoss/Dragonfly/dfget/types"
 	"github.com/dragonflyoss/Dragonfly/pkg/fileutils"
+	"github.com/dragonflyoss/Dragonfly/pkg/pool"
 	"github.com/dragonflyoss/Dragonfly/pkg/queue"
 
 	"github.com/sirupsen/logrus"
 )
+
+// PieceWriter will be used in p2p downloader
+// we provide 2 implementations, one for downloading file, one for streaming
+type PieceWriter interface {
+	// PreRun initializes PieceWriter
+	PreRun(ctx context.Context) error
+
+	// Run starts to process piece data in background
+	Run(ctx context.Context)
+
+	// PostRun will run when finish a task
+	PostRun(ctx context.Context) error
+
+	// Wait will block util all piece are processed
+	Wait()
+}
 
 // ClientWriter writes a file for uploading and a target file.
 type ClientWriter struct {
@@ -39,6 +57,11 @@ type ClientWriter struct {
 	// The downloader will put the piece into this queue after it downloaded a piece successfully.
 	// And clientWriter will poll values from this queue constantly and write to disk.
 	clientQueue queue.Queue
+
+	// notifyQueue sends a notification when all operation about a piece have
+	// been completed successfully.
+	notifyQueue queue.Queue
+
 	// finish indicates whether the task written is completed.
 	finish chan struct{}
 
@@ -70,25 +93,27 @@ type ClientWriter struct {
 	// api holds an instance of SupernodeAPI to interact with supernode.
 	api api.SupernodeAPI
 	cfg *config.Config
+
+	cdnSource apiTypes.CdnSource
 }
 
 // NewClientWriter creates and initialize a ClientWriter instance.
 func NewClientWriter(clientFilePath, serviceFilePath string,
-	clientQueue queue.Queue, api api.SupernodeAPI, cfg *config.Config) (*ClientWriter, error) {
+	clientQueue, notifyQueue queue.Queue,
+	api api.SupernodeAPI, cfg *config.Config, cdnSource apiTypes.CdnSource) PieceWriter {
 	clientWriter := &ClientWriter{
 		clientQueue:     clientQueue,
+		notifyQueue:     notifyQueue,
 		clientFilePath:  clientFilePath,
 		serviceFilePath: serviceFilePath,
 		api:             api,
 		cfg:             cfg,
+		cdnSource:       cdnSource,
 	}
-	if err := clientWriter.init(); err != nil {
-		return nil, err
-	}
-	return clientWriter, nil
+	return clientWriter
 }
 
-func (cw *ClientWriter) init() (err error) {
+func (cw *ClientWriter) PreRun(ctx context.Context) (err error) {
 	cw.p2pPattern = helper.IsP2P(cw.cfg.Pattern)
 	if cw.p2pPattern {
 		if e := fileutils.Link(cw.cfg.RV.TempTarget, cw.clientFilePath); e != nil {
@@ -104,7 +129,7 @@ func (cw *ClientWriter) init() (err error) {
 
 	cw.result = true
 	cw.targetQueue = queue.NewQueue(0)
-	cw.targetWriter, err = NewTargetWriter(cw.cfg.RV.TempTarget, cw.targetQueue, cw.cfg)
+	cw.targetWriter, err = NewTargetWriter(cw.cfg.RV.TempTarget, cw.targetQueue, cw.cfg, cw.cdnSource)
 	if err != nil {
 		return
 	}
@@ -113,6 +138,26 @@ func (cw *ClientWriter) init() (err error) {
 
 	cw.finish = make(chan struct{})
 	return
+}
+
+func (cw *ClientWriter) PostRun(ctx context.Context) (err error) {
+	src := cw.clientFilePath
+	if cw.acrossWrite || !helper.IsP2P(cw.cfg.Pattern) {
+		src = cw.cfg.RV.TempTarget
+	} else {
+		if _, err := os.Stat(cw.clientFilePath); err != nil {
+			logrus.Warnf("client file path:%s not found", cw.clientFilePath)
+			if e := fileutils.Link(cw.serviceFilePath, cw.clientFilePath); e != nil {
+				logrus.Warnln("hard link failed, instead of use copy")
+				fileutils.CopyFile(cw.serviceFilePath, cw.clientFilePath)
+			}
+		}
+	}
+	if err = downloader.MoveFile(src, cw.cfg.RV.RealTarget, cw.cfg.Md5); err != nil {
+		return
+	}
+	logrus.Infof("download successfully from dragonfly")
+	return nil
 }
 
 // Run starts writing downloading file.
@@ -170,30 +215,40 @@ func (cw *ClientWriter) write(piece *Piece) error {
 	startTime := time.Now()
 	if !cw.p2pPattern {
 		cw.targetQueue.Put(piece)
+		go sendSuccessPiece(cw.api, cw.cfg.RV.Cid, piece, time.Since(startTime), cw.notifyQueue)
 		return nil
 	}
 
 	if cw.acrossWrite {
+		piece.IncWriter()
 		cw.targetQueue.Put(piece)
 	}
 
 	cw.pieceIndex++
-	err := writePieceToFile(piece, cw.serviceFile)
+	err := writePieceToFile(piece, cw.serviceFile, cw.cdnSource)
 	if err == nil {
-		go cw.sendSuccessPiece(piece, time.Since(startTime))
+		go sendSuccessPiece(cw.api, cw.cfg.RV.Cid, piece, time.Since(startTime), cw.notifyQueue)
 	}
 	return err
 }
 
-func writePieceToFile(piece *Piece, file *os.File) error {
-	start := int64(piece.PieceNum) * (int64(piece.PieceSize) - 5)
+func writePieceToFile(piece *Piece, file *os.File, cdnSource apiTypes.CdnSource) error {
+	var pieceHeader = 5
+	// the piece is not wrapped with source cdn type
+	noWrapper := (cdnSource == apiTypes.CdnSourceSource)
+	if noWrapper {
+		pieceHeader = 0
+	}
+
+	start := int64(piece.PieceNum) * (int64(piece.PieceSize) - int64(pieceHeader))
 	if _, err := file.Seek(start, 0); err != nil {
 		return err
 	}
 
-	buf := bufio.NewWriterSize(file, 4*1024*1024)
-	_, err := io.Copy(buf, piece.RawContent())
-	buf.Flush()
+	writer := pool.AcquireWriter(file)
+	_, err := piece.WriteTo(writer, noWrapper)
+	pool.ReleaseWriter(writer)
+	writer = nil
 	return err
 }
 
@@ -201,13 +256,39 @@ func startSyncWriter(q queue.Queue) queue.Queue {
 	return nil
 }
 
-func (cw *ClientWriter) sendSuccessPiece(piece *Piece, cost time.Duration) {
-	cw.api.ReportPiece(piece.SuperNode, &types.ReportPieceRequest{
+func sendSuccessPiece(api api.SupernodeAPI, cid string, piece *Piece, cost time.Duration, notifyQueue queue.Queue) {
+	reportPieceRequest := &types.ReportPieceRequest{
 		TaskID:     piece.TaskID,
-		Cid:        cw.cfg.RV.Cid,
+		Cid:        cid,
 		DstCid:     piece.DstCid,
 		PieceRange: piece.Range,
-	})
+	}
+
+	var retry = 0
+	var maxRetryTime = 3
+	for {
+		if retry >= maxRetryTime {
+			logrus.Errorf("failed to report piece to supernode with request(%+v) even after retrying max retry time", reportPieceRequest)
+			break
+		}
+
+		_, err := api.ReportPiece(piece.SuperNode, reportPieceRequest)
+		if err == nil {
+			if notifyQueue != nil {
+				notifyQueue.Put("success")
+			}
+			if retry > 0 {
+				logrus.Warnf("success to report piece with request(%+v) after retrying (%d) times", reportPieceRequest, retry)
+			}
+			break
+		}
+
+		sleepTime := time.Duration(rand.Intn(500)+50) * time.Millisecond
+		logrus.Warnf("failed to report piece to supernode with request(%+v) for (%d) times and will retry after sleep %.3fs", reportPieceRequest, retry, sleepTime.Seconds())
+		time.Sleep(sleepTime)
+		retry++
+	}
+
 	if cost.Seconds() > 2.0 {
 		logrus.Infof(
 			"async writer and report suc from dst:%s... cost:%.3f for range:%s",

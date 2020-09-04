@@ -19,8 +19,13 @@ package downloader
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
+	"sync/atomic"
 
+	apiTypes "github.com/dragonflyoss/Dragonfly/apis/types"
 	"github.com/dragonflyoss/Dragonfly/pkg/constants"
+	"github.com/dragonflyoss/Dragonfly/pkg/pool"
 )
 
 // Piece contains all information of a piece.
@@ -50,17 +55,53 @@ type Piece struct {
 	PieceNum int `json:"pieceNum"`
 
 	// Content uses a buffer to temporarily store the piece content.
-	Content *bytes.Buffer `json:"-"`
+	Content *pool.Buffer `json:"-"`
+
+	// length the length of the content.
+	length int64
+
+	// writerNum record the writer number which will write this piece.
+	writerNum int32
 }
 
-// RawContent returns raw contents.
-func (p *Piece) RawContent() *bytes.Buffer {
+// WriteTo writes piece raw data in content buffer to w.
+// If the piece has wrapper, the piece content will remove the head and tail before writing.
+func (p *Piece) WriteTo(w io.Writer, noWrapper bool) (n int64, err error) {
+	defer p.TryResetContent()
+
+	content := p.RawContent(noWrapper)
+	if content != nil {
+		return content.WriteTo(w)
+	}
+	return 0, fmt.Errorf("piece content length less than 5 bytes")
+}
+
+// IncWriter increase a writer for the piece.
+func (p *Piece) IncWriter() {
+	atomic.AddInt32(&p.writerNum, 1)
+}
+
+// RawContent returns raw contents,
+// If the piece has wrapper, and the piece content will remove the head and tail.
+func (p *Piece) RawContent(noWrapper bool) *bytes.Buffer {
 	contents := p.Content.Bytes()
 	length := len(contents)
+
+	if noWrapper {
+		return bytes.NewBuffer(contents[:])
+	}
 	if length >= 5 {
 		return bytes.NewBuffer(contents[4 : length-1])
 	}
 	return nil
+}
+
+// ContentLength returns the content length.
+func (p *Piece) ContentLength() int64 {
+	if p.length <= 0 && p.Content != nil {
+		p.length = int64(p.Content.Len())
+	}
+	return p.length
 }
 
 func (p *Piece) String() string {
@@ -70,8 +111,24 @@ func (p *Piece) String() string {
 	return ""
 }
 
+// ResetContent reset contents and returns it back to buffer pool.
+func (p *Piece) TryResetContent() {
+	if atomic.AddInt32(&p.writerNum, -1) > 0 {
+		return
+	}
+
+	if p.Content == nil {
+		return
+	}
+	if p.length == 0 {
+		p.length = int64(p.Content.Len())
+	}
+	pool.ReleaseBuffer(p.Content)
+	p.Content = nil
+}
+
 // NewPiece creates a Piece.
-func NewPiece(taskID, node, dstCid, pieceRange string, result, status int) *Piece {
+func NewPiece(taskID, node, dstCid, pieceRange string, result, status int, cdnSource apiTypes.CdnSource) *Piece {
 	return &Piece{
 		TaskID:    taskID,
 		SuperNode: node,
@@ -79,27 +136,26 @@ func NewPiece(taskID, node, dstCid, pieceRange string, result, status int) *Piec
 		Range:     pieceRange,
 		Result:    result,
 		Status:    status,
-		Content:   &bytes.Buffer{},
+		Content:   nil,
+		writerNum: 1,
 	}
 }
 
 // NewPieceSimple creates a Piece with default value.
-func NewPieceSimple(taskID string, node string, status int) *Piece {
+func NewPieceSimple(taskID string, node string, status int, cdnSource apiTypes.CdnSource) *Piece {
 	return &Piece{
 		TaskID:    taskID,
 		SuperNode: node,
 		Status:    status,
 		Result:    constants.ResultInvalid,
-		Content:   &bytes.Buffer{},
+		Content:   nil,
+		writerNum: 1,
 	}
 }
 
 // NewPieceContent creates a Piece with specified content.
 func NewPieceContent(taskID, node, dstCid, pieceRange string,
-	result, status int, contents *bytes.Buffer) *Piece {
-	if contents == nil {
-		contents = &bytes.Buffer{}
-	}
+	result, status int, contents *pool.Buffer, cdnSource apiTypes.CdnSource) *Piece {
 	return &Piece{
 		TaskID:    taskID,
 		SuperNode: node,
@@ -108,5 +164,7 @@ func NewPieceContent(taskID, node, dstCid, pieceRange string,
 		Result:    result,
 		Status:    status,
 		Content:   contents,
+		length:    int64(contents.Len()),
+		writerNum: 1,
 	}
 }

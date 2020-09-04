@@ -20,6 +20,8 @@ import (
 	"context"
 	"path"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/dragonflyoss/Dragonfly/pkg/stringutils"
 	"github.com/dragonflyoss/Dragonfly/supernode/config"
 	"github.com/dragonflyoss/Dragonfly/supernode/store"
@@ -98,9 +100,10 @@ func deleteTaskFiles(ctx context.Context, cacheStore *store.Store, taskID string
 		return err
 	}
 
+	// try to clean the parent bucket
 	if err := cacheStore.Remove(ctx, getParentRaw(taskID)); err != nil &&
 		!store.IsKeyNotFound(err) {
-		return err
+		logrus.Warnf("taskID:%s failed remove parent bucket:%v", taskID, err)
 	}
 
 	return nil

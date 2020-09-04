@@ -25,11 +25,11 @@ import (
 
 	"github.com/dragonflyoss/Dragonfly/supernode/config"
 	"github.com/dragonflyoss/Dragonfly/supernode/daemon/mgr"
-	"github.com/dragonflyoss/Dragonfly/supernode/daemon/mgr/cdn"
 	"github.com/dragonflyoss/Dragonfly/supernode/daemon/mgr/dfgettask"
 	"github.com/dragonflyoss/Dragonfly/supernode/daemon/mgr/gc"
 	"github.com/dragonflyoss/Dragonfly/supernode/daemon/mgr/peer"
 	"github.com/dragonflyoss/Dragonfly/supernode/daemon/mgr/pieceerror"
+	"github.com/dragonflyoss/Dragonfly/supernode/daemon/mgr/preheat"
 	"github.com/dragonflyoss/Dragonfly/supernode/daemon/mgr/progress"
 	"github.com/dragonflyoss/Dragonfly/supernode/daemon/mgr/scheduler"
 	"github.com/dragonflyoss/Dragonfly/supernode/daemon/mgr/task"
@@ -52,6 +52,7 @@ type Server struct {
 	ProgressMgr   mgr.ProgressMgr
 	GCMgr         mgr.GCMgr
 	PieceErrorMgr mgr.PieceErrorMgr
+	PreheatMgr    mgr.PreheatManager
 
 	originClient httpclient.OriginHTTPClient
 }
@@ -94,7 +95,7 @@ func New(cfg *config.Config, logger *logrus.Logger, register prometheus.Register
 		return nil, err
 	}
 
-	cdnMgr, err := cdn.NewManager(cfg, storeLocal, progressMgr, originClient, register)
+	cdnMgr, err := mgr.GetCDNManager(cfg, storeLocal, progressMgr, originClient, register)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +116,11 @@ func New(cfg *config.Config, logger *logrus.Logger, register prometheus.Register
 		return nil, err
 	}
 
+	preheatMgr, err := preheat.NewManager(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Server{
 		Config:        cfg,
 		PeerMgr:       peerMgr,
@@ -123,14 +129,14 @@ func New(cfg *config.Config, logger *logrus.Logger, register prometheus.Register
 		ProgressMgr:   progressMgr,
 		GCMgr:         gcMgr,
 		PieceErrorMgr: pieceErrorMgr,
-
-		originClient: originClient,
+		PreheatMgr:    preheatMgr,
+		originClient:  originClient,
 	}, nil
 }
 
 // Start runs supernode server.
 func (s *Server) Start() error {
-	router := initRoute(s)
+	router := createRouter(s)
 
 	address := fmt.Sprintf("0.0.0.0:%d", s.Config.ListenPort)
 

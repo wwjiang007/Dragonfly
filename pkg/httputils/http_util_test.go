@@ -17,10 +17,16 @@
 package httputils
 
 import (
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"net"
+	"net/http"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,6 +105,30 @@ func (s *HTTPUtilTestSuite) TestHTTPStatusOk(c *check.C) {
 	for i := fasthttp.StatusContinue; i <= fasthttp.StatusNetworkAuthenticationRequired; i++ {
 		c.Assert(HTTPStatusOk(i), check.Equals, i == fasthttp.StatusOK)
 	}
+}
+
+func (s *HTTPUtilTestSuite) TestHttpGet(c *check.C) {
+	res, e := HTTPGetTimeout("http://"+s.host, nil, 0)
+	c.Assert(e, check.IsNil)
+	code := res.StatusCode
+	body, e := ioutil.ReadAll(res.Body)
+	c.Assert(e, check.IsNil)
+	res.Body.Close()
+
+	checkOk(c, code, body, e, 0)
+
+	res, e = HTTPGetTimeout("http://"+s.host, nil, 60*time.Millisecond)
+	c.Assert(e, check.IsNil)
+	code = res.StatusCode
+	body, e = ioutil.ReadAll(res.Body)
+	c.Assert(e, check.IsNil)
+	res.Body.Close()
+
+	checkOk(c, code, body, e, 0)
+
+	_, e = HTTPGetTimeout("http://"+s.host, nil, 20*time.Millisecond)
+	c.Assert(e, check.NotNil)
+	c.Assert(strings.Contains(e.Error(), context.DeadlineExceeded.Error()), check.Equals, true)
 }
 
 func (s *HTTPUtilTestSuite) TestParseQuery(c *check.C) {
@@ -215,6 +245,26 @@ func (s *HTTPUtilTestSuite) TestGetRangeSE(c *check.C) {
 	}
 }
 
+func (s *HTTPUtilTestSuite) TestConcurrencyPostJson(c *check.C) {
+	wg := &sync.WaitGroup{}
+	wg.Add(100)
+
+	for i := 0; i < 100; i++ {
+		go func(x, y int) {
+			defer wg.Done()
+			code, body, e := PostJSON("http://"+s.host, req(x, y), 1*time.Second)
+			time.Sleep(20 * time.Millisecond)
+			checkOk(c, code, body, e, x+y)
+		}(i, i)
+	}
+
+	wg.Wait()
+}
+
+func (s *HTTPUtilTestSuite) TestConstructRangeStr(c *check.C) {
+	c.Check(ConstructRangeStr("200-1000"), check.DeepEquals, "bytes=200-1000")
+}
+
 // ----------------------------------------------------------------------------
 // helper functions and structures
 
@@ -239,4 +289,37 @@ type testJSONReq struct {
 
 type testJSONRes struct {
 	Sum int
+}
+
+type testTransport struct {
+}
+
+func (t *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Body:          http.NoBody,
+		Status:        http.StatusText(http.StatusOK),
+		StatusCode:    http.StatusOK,
+		ContentLength: -1,
+	}, nil
+}
+
+func (s *HTTPUtilTestSuite) TestRegisterProtocol(c *check.C) {
+	protocol := "test"
+	RegisterProtocol(protocol, &testTransport{})
+	resp, err := HTTPWithHeaders(http.MethodGet,
+		protocol+"://test/test",
+		map[string]string{
+			"test": "test",
+		},
+		time.Second,
+		&tls.Config{},
+	)
+	c.Assert(err, check.IsNil)
+	defer resp.Body.Close()
+
+	c.Assert(resp, check.NotNil)
+	c.Assert(resp.ContentLength, check.Equals, int64(-1))
 }

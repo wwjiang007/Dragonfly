@@ -114,7 +114,6 @@ func (s *FileUtilTestSuite) TestDeleteFiles(c *check.C) {
 	f1 := filepath.Join(s.tmpDir, "TestDeleteFile001")
 	f2 := filepath.Join(s.tmpDir, "TestDeleteFile002")
 	os.Create(f1)
-	//os.Create(f2)
 	DeleteFiles(f1, f2)
 	c.Assert(PathExist(f1) || PathExist(f2), check.Equals, false)
 }
@@ -179,6 +178,38 @@ func (s *FileUtilTestSuite) TestLink(c *check.C) {
 	os.Mkdir(linkStr, 0755)
 	err = Link(pathStr, linkStr)
 	c.Assert(err, check.NotNil)
+}
+
+func (s *FileUtilTestSuite) TestSymbolicLink(c *check.C) {
+	pathStr := filepath.Join(s.tmpDir, "TestSymLinkFileNonExist")
+	linkStr := filepath.Join(s.tmpDir, "TestSymLinkNameFileNonExist")
+	err := SymbolicLink(pathStr, linkStr)
+	c.Assert(err, check.NotNil)
+	c.Assert(PathExist(linkStr), check.Equals, false)
+
+	pathStr = filepath.Join(s.tmpDir, "TestSymLinkDir")
+	os.Mkdir(pathStr, 0755)
+	linkStr = filepath.Join(s.tmpDir, "TestSymLinkNameDir")
+	err = SymbolicLink(pathStr, linkStr)
+	c.Assert(err, check.IsNil)
+	c.Assert(PathExist(linkStr), check.Equals, true)
+
+	pathStr = filepath.Join(s.tmpDir, "TestSymLinkFile")
+	os.Create(pathStr)
+	linkStr = filepath.Join(s.tmpDir, "TestSymLinkNameFile")
+	err = SymbolicLink(pathStr, linkStr)
+	c.Assert(err, check.IsNil)
+	c.Assert(PathExist(linkStr), check.Equals, true)
+
+	linkStr = filepath.Join(s.tmpDir, "TestSymLinkNameDirExist")
+	os.Mkdir(linkStr, 0755)
+	err = SymbolicLink(pathStr, linkStr)
+	c.Assert(err, check.NotNil)
+
+	linkStr = filepath.Join(s.tmpDir, "TestSymLinkNameFileExist")
+	os.Create(linkStr)
+	err = SymbolicLink(pathStr, linkStr)
+	c.Assert(err, check.IsNil)
 }
 
 func (s *FileUtilTestSuite) TestCopyFile(c *check.C) {
@@ -275,4 +306,48 @@ func (s *FileUtilTestSuite) TestLoadYaml(c *check.C) {
 		}
 
 	}
+}
+
+func (s *FileUtilTestSuite) TestIsRegularFile(c *check.C) {
+	pathStr := filepath.Join(s.tmpDir, "TestIsRegularFile")
+	c.Assert(IsRegularFile(pathStr), check.Equals, false)
+
+	os.Create(pathStr)
+	c.Assert(IsRegularFile(pathStr), check.Equals, true)
+	os.Remove(pathStr)
+
+	// Don't set mode to create a non-regular file
+	os.OpenFile(pathStr, 0, 0666)
+	c.Assert(IsRegularFile(pathStr), check.Equals, false)
+	os.Remove(pathStr)
+}
+
+func (s *FileUtilTestSuite) TestIsEmptyDir(c *check.C) {
+	pathStr := filepath.Join(s.tmpDir, "TestIsEmptyDir")
+
+	// not exist
+	empty, err := IsEmptyDir(pathStr)
+	c.Assert(empty, check.Equals, false)
+	c.Assert(err, check.NotNil)
+
+	// not a directory
+	_, _ = os.Create(pathStr)
+	empty, err = IsEmptyDir(pathStr)
+	c.Assert(empty, check.Equals, false)
+	c.Assert(err, check.NotNil)
+	_ = os.Remove(pathStr)
+
+	// empty
+	_ = os.Mkdir(pathStr, 0755)
+	empty, err = IsEmptyDir(pathStr)
+	c.Assert(empty, check.Equals, true)
+	c.Assert(err, check.IsNil)
+
+	// not empty
+	childPath := filepath.Join(pathStr, "child")
+	_ = os.Mkdir(childPath, 0755)
+	empty, err = IsEmptyDir(pathStr)
+	c.Assert(empty, check.Equals, false)
+	c.Assert(err, check.IsNil)
+	_ = os.Remove(pathStr)
 }

@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	apiTypes "github.com/dragonflyoss/Dragonfly/apis/types"
 	"github.com/dragonflyoss/Dragonfly/dfget/config"
 	"github.com/dragonflyoss/Dragonfly/dfget/core/api"
 	"github.com/dragonflyoss/Dragonfly/dfget/types"
@@ -32,6 +33,7 @@ import (
 	"github.com/dragonflyoss/Dragonfly/pkg/httputils"
 	"github.com/dragonflyoss/Dragonfly/pkg/limitreader"
 	"github.com/dragonflyoss/Dragonfly/pkg/netutils"
+	"github.com/dragonflyoss/Dragonfly/pkg/pool"
 	"github.com/dragonflyoss/Dragonfly/pkg/queue"
 	"github.com/dragonflyoss/Dragonfly/pkg/ratelimiter"
 
@@ -48,6 +50,8 @@ const (
 type PowerClient struct {
 	// taskID is a string which represents a unique task.
 	taskID string
+	// headers is the extra HTTP headers when downloading a piece.
+	headers []string
 	// node indicates the IP address of the currently registered supernode.
 	node string
 	// pieceTask is the data when successfully pulling piece task
@@ -74,6 +78,9 @@ type PowerClient struct {
 	downloadAPI api.DownloadAPI
 
 	clientError *types.ClientErrorRequest
+
+	cdnSource  apiTypes.CdnSource
+	fileLength int64
 }
 
 // Run starts run the task.
@@ -107,14 +114,12 @@ func (pc *PowerClient) ClientError() *types.ClientErrorRequest {
 	return pc.clientError
 }
 
-func (pc *PowerClient) downloadPiece() (content *bytes.Buffer, e error) {
-	pieceMetaArr := strings.Split(pc.pieceTask.PieceMd5, ":")
-	pieceMD5 := pieceMetaArr[0]
+func (pc *PowerClient) downloadPiece() (content *pool.Buffer, e error) {
 	dstIP := pc.pieceTask.PeerIP
 	peerPort := pc.pieceTask.PeerPort
 
 	// check that the target download peer is available
-	if dstIP != pc.node {
+	if dstIP != "" && dstIP != pc.node {
 		if _, e = httputils.CheckConnect(dstIP, peerPort, -1); e != nil {
 			return nil, e
 		}
@@ -139,20 +144,32 @@ func (pc *PowerClient) downloadPiece() (content *bytes.Buffer, e error) {
 		return nil, errortypes.New(resp.StatusCode, pc.readBody(resp.Body))
 	}
 
+	pieceMetaArr := strings.Split(pc.pieceTask.PieceMd5, ":")
+	pieceMD5 := pieceMetaArr[0]
+
 	// start to read data from resp
 	// use limitReader to limit the download speed
 	limitReader := limitreader.NewLimitReaderWithLimiter(pc.rateLimiter, resp.Body, pieceMD5 != "")
-	content = &bytes.Buffer{}
+	content = pool.AcquireBufferSize(int(pc.pieceTask.PieceSize))
+	defer func() {
+		// if an error happened, the content cannot be released outside.
+		if e != nil {
+			pool.ReleaseBuffer(content)
+			content = nil
+		}
+	}()
 	if pc.total, e = content.ReadFrom(limitReader); e != nil {
 		return nil, e
 	}
 	pc.readCost = time.Since(startTime)
 
 	// Verify md5 code
-	if realMd5 := limitReader.Md5(); realMd5 != pieceMD5 {
-		pc.initFileMd5NotMatchError(dstIP, realMd5, pieceMD5)
-		return nil, fmt.Errorf("piece range:%s md5 not match, expected:%s real:%s",
-			pc.pieceTask.Range, pieceMD5, realMd5)
+	if pieceMD5 != "" {
+		if realMd5 := limitReader.Md5(); realMd5 != pieceMD5 {
+			pc.initFileMd5NotMatchError(dstIP, realMd5, pieceMD5)
+			return nil, fmt.Errorf("piece range:%s md5 not match, expected:%s real:%s",
+				pc.pieceTask.Range, pieceMD5, realMd5)
+		}
 	}
 
 	if timeDuring := time.Since(startTime); timeDuring > downloadPieceTimeout {
@@ -163,17 +180,30 @@ func (pc *PowerClient) downloadPiece() (content *bytes.Buffer, e error) {
 }
 
 func (pc *PowerClient) createDownloadRequest() *api.DownloadRequest {
+	pieceRange := pc.pieceTask.Range
+	headers := netutils.ConvertHeaders(pc.headers)
+	if pc.cdnSource == apiTypes.CdnSourceSource {
+		if pc.fileLength > 0 {
+			pieceRange = wipeOutOfRange(pc.pieceTask.Range, pc.fileLength)
+		}
+		if headers == nil {
+			headers = make(map[string]string)
+		}
+		headers[config.StrCDNSource] = string(apiTypes.CdnSourceSource)
+	}
+
 	return &api.DownloadRequest{
 		Path:       pc.pieceTask.Path,
-		PieceRange: pc.pieceTask.Range,
+		PieceRange: pieceRange,
 		PieceNum:   pc.pieceTask.PieceNum,
 		PieceSize:  pc.pieceTask.PieceSize,
+		Headers:    headers,
 	}
 }
 
-func (pc *PowerClient) successPiece(content *bytes.Buffer) *Piece {
+func (pc *PowerClient) successPiece(content *pool.Buffer) *Piece {
 	piece := NewPieceContent(pc.taskID, pc.node, pc.pieceTask.Cid, pc.pieceTask.Range,
-		constants.ResultSemiSuc, constants.TaskStatusRunning, content)
+		constants.ResultSemiSuc, constants.TaskStatusRunning, content, pc.cdnSource)
 	piece.PieceSize = pc.pieceTask.PieceSize
 	piece.PieceNum = pc.pieceTask.PieceNum
 	return piece
@@ -181,7 +211,7 @@ func (pc *PowerClient) successPiece(content *bytes.Buffer) *Piece {
 
 func (pc *PowerClient) failPiece() *Piece {
 	return NewPiece(pc.taskID, pc.node, pc.pieceTask.Cid, pc.pieceTask.Range,
-		constants.ResultFail, constants.TaskStatusRunning)
+		constants.ResultFail, constants.TaskStatusRunning, pc.cdnSource)
 }
 
 func (pc *PowerClient) initFileNotExistError() {

@@ -26,6 +26,7 @@ import (
 	"github.com/dragonflyoss/Dragonfly/pkg/digest"
 	"github.com/dragonflyoss/Dragonfly/pkg/errortypes"
 	"github.com/dragonflyoss/Dragonfly/pkg/netutils"
+	"github.com/dragonflyoss/Dragonfly/pkg/rangeutils"
 	"github.com/dragonflyoss/Dragonfly/pkg/stringutils"
 	"github.com/dragonflyoss/Dragonfly/pkg/timeutils"
 	"github.com/dragonflyoss/Dragonfly/supernode/config"
@@ -42,7 +43,7 @@ func (tm *Manager) addOrUpdateTask(ctx context.Context, req *types.TaskCreateReq
 	if stringutils.IsEmptyStr(req.TaskURL) {
 		taskURL = netutils.FilterURLParam(req.RawURL, req.Filter)
 	}
-	taskID := generateTaskID(taskURL, req.Md5, req.Identifier)
+	taskID := generateTaskID(taskURL, req.Md5, req.Identifier, req.Headers)
 
 	util.GetLock(taskID, true)
 	defer util.ReleaseLock(taskID, true)
@@ -93,6 +94,19 @@ func (tm *Manager) addOrUpdateTask(ctx context.Context, req *types.TaskCreateReq
 		}
 		if errortypes.IsAuthenticationRequired(err) {
 			return nil, err
+		}
+	}
+	if tm.cfg.CDNPattern == config.CDNPatternSource {
+		if fileLength <= 0 {
+			return nil, fmt.Errorf("failed to get file length and it is required in source CDN pattern")
+		}
+
+		supportRange, err := tm.originClient.IsSupportRange(task.TaskURL, task.Headers)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to check whether the task(%s) supports partial requests", task.ID)
+		}
+		if !supportRange {
+			return nil, fmt.Errorf("the task URL should support range request in source CDN pattern: %s", taskID)
 		}
 	}
 	task.HTTPFileLength = fileLength
@@ -246,7 +260,7 @@ func (tm *Manager) triggerCdnSyncAction(ctx context.Context, task *types.TaskInf
 func (tm *Manager) initCdnNode(ctx context.Context, task *types.TaskInfo) error {
 	var cid = tm.cfg.GetSuperCID(task.ID)
 	var pid = tm.cfg.GetSuperPID()
-	path, err := tm.cdnMgr.GetHTTPPath(ctx, task.ID)
+	path, err := tm.cdnMgr.GetHTTPPath(ctx, task)
 	if err != nil {
 		return err
 	}
@@ -277,7 +291,7 @@ func (tm *Manager) processTaskStart(ctx context.Context, srcCID string, task *ty
 // req.DstPID, req.PieceRange, req.PieceResult, req.DfgetTaskStatus
 func (tm *Manager) processTaskRunning(ctx context.Context, srcCID, srcPID string, task *types.TaskInfo, req *types.PiecePullRequest,
 	dfgetTask *types.DfGetTask) (bool, interface{}, error) {
-	pieceNum := util.CalculatePieceNum(req.PieceRange)
+	pieceNum := rangeutils.CalculatePieceNum(req.PieceRange)
 	if pieceNum == -1 {
 		return false, nil, errors.Wrapf(errortypes.ErrInvalidValue, "pieceRange: %s", req.PieceRange)
 	}
@@ -321,7 +335,7 @@ func (tm *Manager) parseAvailablePeers(ctx context.Context, clientID string, tas
 	cdnSuccess := task.CdnStatus == types.TaskInfoCdnStatusSUCCESS
 	pieceSuccess, _ := tm.progressMgr.GetPieceProgressByCID(ctx, task.ID, clientID, "success")
 	logrus.Debugf("taskID(%s) clientID(%s) get successful pieces: %v", task.ID, clientID, pieceSuccess)
-	if cdnSuccess && (int32(len(pieceSuccess)) == task.PieceTotal) {
+	if cdnSuccess && (task.PieceTotal != 0 && (int32(len(pieceSuccess)) == task.PieceTotal)) {
 		// update dfget task status to success
 		if err := tm.dfgetTaskMgr.UpdateStatus(ctx, clientID, task.ID, types.DfGetTaskStatusSUCCESS); err != nil {
 			logrus.Errorf("failed to update dfget task status with "+
@@ -333,8 +347,6 @@ func (tm *Manager) parseAvailablePeers(ctx context.Context, clientID string, tas
 		return true, finishInfo, nil
 	}
 
-	// Get peerName to represent peer in metrics.
-	peer, _ := tm.peerMgr.Get(context.Background(), dfgetTask.PeerID)
 	// get scheduler pieceResult
 	logrus.Debugf("start scheduler for taskID: %s clientID: %s", task.ID, clientID)
 	startTime := time.Now()
@@ -342,7 +354,14 @@ func (tm *Manager) parseAvailablePeers(ctx context.Context, clientID string, tas
 	if err != nil {
 		return false, nil, err
 	}
-	tm.metrics.scheduleDurationMilliSeconds.WithLabelValues(peer.IP.String()).Observe(timeutils.SinceInMilliseconds(startTime))
+	timeCost := timeutils.SinceInMilliseconds(startTime)
+	// Get peerName to represent peer in metrics.
+	if peer, err := tm.peerMgr.Get(context.Background(), dfgetTask.PeerID); err == nil {
+		tm.metrics.scheduleDurationMilliSeconds.WithLabelValues(peer.IP.String()).Observe(timeCost)
+	} else {
+		logrus.Warnf("failed to get peer with peerId(%s) taskId(%s): %v",
+			dfgetTask.PeerID, task.ID, err)
+	}
 	logrus.Debugf("get scheduler result length(%d) with taskID(%s) and clientID(%s)", len(pieceResult), task.ID, clientID)
 
 	if len(pieceResult) == 0 {
@@ -393,7 +412,7 @@ func (tm *Manager) pieceResultToPieceInfo(ctx context.Context, pr *mgr.PieceResu
 		PeerIP:     peer.IP.String(),
 		PeerPort:   peer.Port,
 		PieceMD5:   pieceMD5,
-		PieceRange: util.CalculatePieceRange(pr.PieceNum, pieceSize),
+		PieceRange: rangeutils.CalculatePieceRange(pr.PieceNum, pieceSize),
 		PieceSize:  pieceSize,
 	}, nil
 }
@@ -480,15 +499,19 @@ func validateParams(req *types.TaskCreateRequest) error {
 
 // generateTaskID generates taskID with taskURL,md5 and identifier
 // and returns the SHA-256 checksum of the data.
-func generateTaskID(taskURL, md5, identifier string) string {
+func generateTaskID(taskURL, md5, identifier string, header map[string]string) string {
 	sign := ""
 	if !stringutils.IsEmptyStr(md5) {
 		sign = md5
 	} else if !stringutils.IsEmptyStr(identifier) {
 		sign = identifier
 	}
-	id := fmt.Sprintf("%s%s%s%s", key, taskURL, sign, key)
-
+	var id string
+	if r, ok := header["Range"]; ok {
+		id = fmt.Sprintf("%s%s%s%s%s", key, taskURL, sign, r, key)
+	} else {
+		id = fmt.Sprintf("%s%s%s%s", key, taskURL, sign, key)
+	}
 	return digest.Sha256(id)
 }
 
@@ -527,13 +550,13 @@ func isWait(CDNStatus string) bool {
 func (tm *Manager) getHTTPFileLength(taskID, url string, headers map[string]string) (int64, error) {
 	fileLength, code, err := tm.originClient.GetContentLength(url, headers)
 	if err != nil {
-		return -1, errors.Wrapf(errortypes.ErrUnknowError, "failed to get http file Length: %v", err)
+		return -1, errors.Wrapf(errortypes.ErrUnknownError, "failed to get http file Length: %v", err)
 	}
 
 	if code == http.StatusUnauthorized || code == http.StatusProxyAuthRequired {
 		return -1, errors.Wrapf(errortypes.ErrAuthenticationRequired, "taskID: %s,code: %d", taskID, code)
 	}
-	if code != http.StatusOK {
+	if code != http.StatusOK && code != http.StatusPartialContent {
 		logrus.Warnf("failed to get http file length with unexpected code: %d", code)
 		if code == http.StatusNotFound {
 			return -1, errors.Wrapf(errortypes.ErrURLNotReachable, "taskID: %s, url: %s", taskID, url)

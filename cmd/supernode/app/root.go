@@ -123,7 +123,11 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	setupFlags(rootCmd)
+
+	// add sub commands
 	rootCmd.AddCommand(cmd.NewGenDocCommand("supernode"))
+	rootCmd.AddCommand(cmd.NewVersionCommand("supernode"))
+	rootCmd.AddCommand(cmd.NewConfigCommand("supernode", getDefaultConfig))
 }
 
 // setupFlags setups flags for command line.
@@ -140,6 +144,9 @@ func setupFlags(cmd *cobra.Command) {
 
 	flagSet.String("config", config.DefaultSupernodeConfigFilePath,
 		"the path of supernode's configuration file")
+
+	flagSet.String("cdn-pattern", config.CDNPatternLocal,
+		"cdn pattern, must be in [\"local\", \"source\"]. Default: local")
 
 	flagSet.Int("port", defaultBaseProperties.ListenPort,
 		"listenPort is the port that supernode server listens on")
@@ -201,6 +208,10 @@ func bindRootFlags(v *viper.Viper) error {
 		{
 			key:  "config",
 			flag: "config",
+		},
+		{
+			key:  "base.CDNPattern",
+			flag: "cdn-pattern",
 		},
 		{
 			key:  "base.listenPort",
@@ -298,6 +309,11 @@ func readConfigFile(v *viper.Viper, cmd *cobra.Command) error {
 	return nil
 }
 
+// getDefaultConfig returns the default configuration of supernode
+func getDefaultConfig() (interface{}, error) {
+	return getConfigFromViper(viper.GetViper())
+}
+
 // getConfigFromViper returns supernode config from the given viper instance
 func getConfigFromViper(v *viper.Viper) (*config.Config, error) {
 	cfg := config.NewConfig()
@@ -359,8 +375,8 @@ func setAdvertiseIP(cfg *config.Config) error {
 		return errors.Wrapf(errortypes.ErrSystemError, "failed to get ip list: %v", err)
 	}
 	if len(ipList) == 0 {
-		logrus.Debugf("get empty system's unicast interface addresses")
-		return nil
+		logrus.Errorf("get empty system's unicast interface addresses")
+		return errors.Wrapf(errortypes.ErrSystemError, "Unable to autodetect advertiser ip, please set it via --advertise-ip")
 	}
 
 	cfg.AdvertiseIP = ipList[0]

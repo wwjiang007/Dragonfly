@@ -25,8 +25,10 @@ import (
 	"os"
 	"testing"
 
+	"github.com/dragonflyoss/Dragonfly/apis/types"
 	"github.com/dragonflyoss/Dragonfly/dfget/config"
 	. "github.com/dragonflyoss/Dragonfly/dfget/core/helper"
+	"github.com/dragonflyoss/Dragonfly/dfget/locator"
 	"github.com/dragonflyoss/Dragonfly/pkg/constants"
 
 	"github.com/go-check/check"
@@ -57,14 +59,14 @@ func (s *RegistTestSuite) TearDownSuite(c *check.C) {
 }
 
 func (s *RegistTestSuite) TestNewRegisterResult(c *check.C) {
-	result := NewRegisterResult("node", []string{"1"}, "url", "taskID",
-		10, 1)
+	result := NewRegisterResult("node", "url", "taskID",
+		10, 1, "supernode")
 	c.Assert(result.Node, check.Equals, "node")
-	c.Assert(result.RemainderNodes, check.DeepEquals, []string{"1"})
 	c.Assert(result.URL, check.Equals, "url")
 	c.Assert(result.TaskID, check.Equals, "taskID")
 	c.Assert(result.FileLength, check.Equals, int64(10))
 	c.Assert(result.PieceSize, check.Equals, int32(1))
+	c.Assert(result.CDNSource, check.Equals, types.CdnSource("supernode"))
 
 	str, _ := json.Marshal(result)
 	c.Assert(result.String(), check.Equals, string(str))
@@ -76,9 +78,10 @@ func (s *RegistTestSuite) TestSupernodeRegister_Register(c *check.C) {
 	m := new(MockSupernodeAPI)
 	m.RegisterFunc = CreateRegisterFunc()
 
-	register := NewSupernodeRegister(cfg, m)
-
+	nodeStr := "127.0.0.1:8002"
+	snLocator, _ := locator.NewStaticLocatorFromStr("test", []string{nodeStr})
 	var f = func(ec int, msg string, data *RegisterResult) {
+		register := NewSupernodeRegister(cfg, m, snLocator)
 		resp, e := register.Register(0)
 		if msg == "" {
 			c.Assert(e, check.IsNil)
@@ -91,24 +94,24 @@ func (s *RegistTestSuite) TestSupernodeRegister_Register(c *check.C) {
 		}
 	}
 
-	cfg.Nodes = []string{""}
-	f(constants.HTTPError, "connection refused", nil)
+	snLocator.Next()
+	f(constants.HTTPError, "empty response, unknown error", nil)
 
-	cfg.Nodes = []string{"x"}
+	snLocator.Refresh()
 	f(501, "invalid source url", nil)
 
-	cfg.Nodes = []string{"x"}
+	snLocator.Refresh()
 	cfg.URL = "http://taobao.com"
 	f(constants.CodeNeedAuth, "need auth", nil)
 
-	cfg.Nodes = []string{"x"}
+	snLocator.Refresh()
 	cfg.URL = "http://github.com"
 	f(constants.CodeWaitAuth, "wait auth", nil)
 
-	cfg.Nodes = []string{"x"}
+	snLocator.Refresh()
 	cfg.URL = "http://lowzj.com"
 	f(constants.Success, "", &RegisterResult{
-		Node: "x", RemainderNodes: []string{}, URL: cfg.URL, TaskID: "a",
+		Node: nodeStr, URL: cfg.URL, TaskID: "a",
 		FileLength: 100, PieceSize: 10})
 
 	f(constants.HTTPError, "empty response, unknown error", nil)
@@ -117,7 +120,7 @@ func (s *RegistTestSuite) TestSupernodeRegister_Register(c *check.C) {
 func (s *RegistTestSuite) TestSupernodeRegister_constructRegisterRequest(c *check.C) {
 	buf := &bytes.Buffer{}
 	cfg := s.createConfig(buf)
-	register := &supernodeRegister{nil, cfg}
+	register := &supernodeRegister{nil, nil, cfg, nil}
 
 	cfg.Identifier = "id"
 	req := register.constructRegisterRequest(0)

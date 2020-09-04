@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	api_types "github.com/dragonflyoss/Dragonfly/apis/types"
 	"github.com/dragonflyoss/Dragonfly/dfget/types"
 	"github.com/dragonflyoss/Dragonfly/pkg/constants"
 	"github.com/dragonflyoss/Dragonfly/pkg/httputils"
@@ -103,10 +104,10 @@ func (s *SupernodeAPITestSuite) TestSupernodeAPI_ReportPiece(c *check.C) {
 		TaskID:     "sssss",
 		PieceRange: "0-11",
 	}
-	s.mock.GetFunc = s.mock.CreateGetFunc(200, []byte(`{"Code":700}`), nil)
+	s.mock.GetFunc = s.mock.CreateGetFunc(200, []byte(`{"Code":611}`), nil)
 	r, e := s.api.ReportPiece(localhost, req)
 	c.Check(e, check.IsNil)
-	c.Check(r.Code, check.Equals, 700)
+	c.Check(r.Code, check.Equals, 611)
 }
 
 func (s *SupernodeAPITestSuite) TestSupernodeAPI_ServiceDown(c *check.C) {
@@ -121,6 +122,26 @@ func (s *SupernodeAPITestSuite) TestSupernodeAPI_ReportClientError(c *check.C) {
 	r, e := s.api.ReportClientError(localhost, nil)
 	c.Check(e, check.IsNil)
 	c.Check(r.Code, check.Equals, 700)
+}
+
+func (s *SupernodeAPITestSuite) TestSupernodeAPI_ReportMetrics(c *check.C) {
+	s.mock.PostJSONFunc = s.mock.CreatePostJSONFunc(0, nil, nil)
+	r, e := s.api.ReportMetrics(localhost, &api_types.TaskMetricsRequest{})
+	c.Assert(r, check.IsNil)
+	c.Assert(e.Error(), check.Equals, "0:")
+
+	s.mock.PostJSONFunc = s.mock.CreatePostJSONFunc(0, nil,
+		fmt.Errorf("test"))
+	r, e = s.api.ReportMetrics(localhost, &api_types.TaskMetricsRequest{})
+	c.Assert(r, check.IsNil)
+	c.Assert(e.Error(), check.Equals, "test")
+
+	res := types.RegisterResponse{BaseResponse: &types.BaseResponse{}}
+	s.mock.PostJSONFunc = s.mock.CreatePostJSONFunc(200, []byte(res.String()), nil)
+	r, e = s.api.ReportMetrics(localhost, &api_types.TaskMetricsRequest{})
+	c.Assert(e, check.IsNil)
+	c.Assert(r, check.NotNil)
+	c.Assert(r.Code, check.Equals, 0)
 }
 
 func (s *SupernodeAPITestSuite) TestSupernodeAPI_get(c *check.C) {
