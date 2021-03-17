@@ -228,8 +228,7 @@ func (p2p *P2PDownloader) run(ctx context.Context, pieceWriter PieceWriter) erro
 				if p2p.cfg.Md5 == "" {
 					p2p.cfg.Md5 = response.FinishData().Md5
 				}
-				p2p.finishTask(ctx, pieceWriter)
-				return nil
+				return p2p.finishTask(ctx, pieceWriter)
 			} else {
 				logrus.Warnf("request piece result:%v", response)
 				if code == constants.CodePeerWait {
@@ -460,13 +459,9 @@ func (p2p *P2PDownloader) processPiece(response *types.PullPieceTaskResponse,
 		v, ok := p2p.pieceSet[pieceRange]
 		if ok && v {
 			alreadyDownload = append(alreadyDownload, pieceRange)
-			p2p.queue.Put(NewPiece(p2p.taskID,
-				p2p.node,
-				pieceTask.Cid,
-				pieceRange,
-				constants.ResultSemiSuc,
-				constants.TaskStatusRunning,
-				p2p.RegisterResult.CDNSource))
+			alreadyDownloadedPiece := NewPiece(p2p.taskID, p2p.node, pieceTask.Cid, pieceRange, constants.ResultSemiSuc, constants.TaskStatusRunning, p2p.RegisterResult.CDNSource)
+			p2p.queue.Put(alreadyDownloadedPiece)
+			go sendSuccessPiece(p2p.API, p2p.cfg.RV.Cid, alreadyDownloadedPiece, 0, p2p.notifyQueue)
 			continue
 		}
 		if !ok {
@@ -484,7 +479,7 @@ func (p2p *P2PDownloader) processPiece(response *types.PullPieceTaskResponse,
 	}
 }
 
-func (p2p *P2PDownloader) finishTask(ctx context.Context, pieceWriter PieceWriter) {
+func (p2p *P2PDownloader) finishTask(ctx context.Context, pieceWriter PieceWriter) error {
 	// wait client writer finished
 	logrus.Infof("remaining piece to be written count:%d", p2p.clientQueue.Len())
 	p2p.clientQueue.Put(last)
@@ -494,14 +489,15 @@ func (p2p *P2PDownloader) finishTask(ctx context.Context, pieceWriter PieceWrite
 		time.Since(waitStart).Seconds(), p2p.queue.Len(), p2p.clientQueue.Len())
 
 	if p2p.cfg.BackSourceReason > 0 {
-		return
+		return nil
 	}
 
 	err := pieceWriter.PostRun(ctx)
 	if err != nil {
 		logrus.Warnf("post run error: %s", err)
+		return err
 	}
-
+	return nil
 }
 
 func (p2p *P2PDownloader) refresh(item *Piece) {
